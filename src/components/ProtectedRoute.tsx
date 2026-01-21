@@ -14,7 +14,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
         <div className="flex flex-col items-center gap-3">
-          <Loader size={40} className="animate-spin text-blue-600" />
+          <Loader size={40} className="animate-spin text-utak-darkseagreen" />
           <p className="text-gray-600 font-medium">Loading...</p>
         </div>
       </div>

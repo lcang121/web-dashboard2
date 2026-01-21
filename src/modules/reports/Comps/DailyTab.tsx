@@ -228,7 +228,7 @@ export default function DailyTab() {
               type="datetime-local"
               value={Moment(sttS).format('YYYY-MM-DDTHH:mm')}
               onChange={(e) => setSttS(new Date(e.target.value))}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-utak-darkseagreen focus:border-transparent"
             />
           </div>
           <div>
@@ -237,7 +237,7 @@ export default function DailyTab() {
               type="datetime-local"
               value={Moment(endS).format('YYYY-MM-DDTHH:mm')}
               onChange={(e) => setEndS(new Date(e.target.value))}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-utak-darkseagreen focus:border-transparent"
             />
           </div>
         </div>
@@ -252,7 +252,7 @@ export default function DailyTab() {
             onClick={() => setIsZReprint(false)}
             className={`px-4 py-2 rounded font-medium transition-colors ${
               !isZReprint
-                ? 'bg-blue-600 text-white'
+                ? 'bg-utak-darkseagreen text-white'
                 : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
             }`}>
             Regular Z-Reading
@@ -261,7 +261,7 @@ export default function DailyTab() {
             onClick={() => setIsZReprint(true)}
             className={`px-4 py-2 rounded font-medium transition-colors ${
               isZReprint
-                ? 'bg-blue-600 text-white'
+                ? 'bg-utak-darkseagreen text-white'
                 : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
             }`}>
             Z-Reading Reprint

@@ -29,15 +29,15 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-utak-darkseagreen to-utak-blue flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo/Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-white rounded-full mb-4">
-            <LogIn size={32} className="text-blue-600" />
+            <LogIn size={32} className="text-utak-darkseagreen" />
           </div>
           <h1 className="text-4xl font-bold text-white mb-2">UTAK</h1>
-          <p className="text-blue-100">Reports Dashboard</p>
+          <p className="text-white/80">Reports Dashboard</p>
         </div>
 
         {/* Login Form */}
@@ -65,7 +65,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 disabled={loading}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-utak-darkseagreen focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                 required
               />
             </div>
@@ -82,7 +82,7 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 disabled={loading}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-utak-darkseagreen focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                 required
               />
             </div>
@@ -91,7 +91,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-6">
+              className="w-full py-3 px-4 bg-utak-darkseagreen hover:bg-utak-darkgreen text-white font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-6">
               {loading ? (
                 <>
                   <Loader size={20} className="animate-spin" />
@@ -106,16 +106,10 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Test Account Info */}
-          <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-            <p className="text-sm text-blue-900 font-medium mb-2">Test Account:</p>
-            <p className="text-sm text-blue-700">Email: <code className="bg-white px-2 py-1 rounded">biraccred_test@utak.io</code></p>
-            <p className="text-sm text-blue-700">Password: <code className="bg-white px-2 py-1 rounded">birmasterkey</code></p>
-          </div>
         </div>
 
         {/* Footer */}
-        <p className="text-center text-blue-100 text-sm mt-6">
+        <p className="text-center text-white/80 text-sm mt-6">
           Powered by UTAK • {new Date().getFullYear()}
         </p>
       </div>

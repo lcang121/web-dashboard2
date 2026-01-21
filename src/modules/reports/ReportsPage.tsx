@@ -42,7 +42,7 @@ export default function ReportsPage() {
               onClick={() => handleTabClick(tab.path)}
               className={`px-4 py-3 font-medium text-sm whitespace-nowrap border-b-2 transition-colors ${
                 activeTab === tab.path
-                  ? 'border-blue-600 text-blue-600'
+                  ? 'border-utak-darkseagreen text-utak-darkseagreen'
                   : 'border-transparent text-gray-600 hover:text-gray-900'
               }`}>
               {tab.label}

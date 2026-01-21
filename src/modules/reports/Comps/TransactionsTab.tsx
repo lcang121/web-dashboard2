@@ -121,7 +121,7 @@ export default function TransactionsTab() {
                 type="datetime-local"
                 value={startDateString}
                 onChange={(e) => handleDateChange('start', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-utak-darkseagreen focus:border-transparent"
               />
             </div>
             <div className="flex-1">
@@ -130,7 +130,7 @@ export default function TransactionsTab() {
                 type="datetime-local"
                 value={endDateString}
                 onChange={(e) => handleDateChange('end', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-utak-darkseagreen focus:border-transparent"
               />
             </div>
           </div>
@@ -155,7 +155,7 @@ export default function TransactionsTab() {
         {txnsData.loading ? (
           <div className="flex items-center justify-center h-64">
             <div className="flex flex-col items-center gap-2">
-              <Loader size={32} className="animate-spin text-blue-600" />
+              <Loader size={32} className="animate-spin text-utak-darkseagreen" />
               <p className="text-gray-600">Loading transactions...</p>
             </div>
           </div>
@@ -171,7 +171,7 @@ export default function TransactionsTab() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Date</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Time</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-green-700 uppercase">Total</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-blue-700 uppercase">Service</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-utak-text uppercase">Service</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-pink-700 uppercase">Discount</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase">Items</th>
                 </tr>
@@ -182,13 +182,13 @@ export default function TransactionsTab() {
                     <td className="px-6 py-4 text-sm text-gray-900">
                       {Moment.unix(Number(txn.key)).format('DD MMM YYYY')}
                     </td>
-                    <td className="px-6 py-4 text-sm text-blue-600 font-medium">
+                    <td className="px-6 py-4 text-sm text-utak-darkseagreen font-medium">
                       {Moment.unix(Number(txn.key)).format('h:mm a')}
                     </td>
                     <td className="px-6 py-4 text-sm text-green-600 font-medium text-right">
                       {txn.getFormattedCurrency('$amountDue')}
                     </td>
-                    <td className="px-6 py-4 text-sm text-blue-600 font-medium text-right">
+                    <td className="px-6 py-4 text-sm text-utak-darkseagreen font-medium text-right">
                       {txn.getFormattedCurrency('$service')}
                     </td>
                     <td className="px-6 py-4 text-sm text-pink-600 font-medium text-right">

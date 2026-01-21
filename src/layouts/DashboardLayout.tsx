@@ -29,7 +29,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <div className="flex justify-between items-center h-16">
             {/* Logo */}
             <div className="flex items-center gap-3">
-              <div className="text-2xl font-bold text-blue-600">UTAK</div>
+              <div className="text-2xl font-bold text-utak-darkseagreen">UTAK</div>
               <span className="hidden sm:inline text-gray-600">Reports Dashboard</span>
             </div>
 
@@ -41,7 +41,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 <div className="text-right hidden sm:block">
                   <p className="text-sm font-medium text-gray-900">{user?.email}</p>
                 </div>
-                <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-sm font-semibold">
+                <div className="w-8 h-8 bg-utak-darkseagreen rounded-full flex items-center justify-center text-white text-sm font-semibold">
                   {user?.email?.charAt(0).toUpperCase()}
                 </div>
               </button>
