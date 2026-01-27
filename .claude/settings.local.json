@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install recharts)",
+      "Bash(npm run dev)",
+      "Bash(npx tsc --noEmit)"
+    ]
+  }
+}
