@@ -190,6 +190,93 @@ export async function saveTransactions(
   }
 }
 
+// Returns report (aligns with utakmobile - fetches from returns collection)
+export async function saveReturnsReport(
+  sttS?: number,
+  endS?: number,
+  upload = false,
+) {
+  try {
+    const userUid = getCurrentUserUid();
+    if (!userUid) throw new Error("User not authenticated");
+    if (!sttS || !endS) throw new Error("Start and end timestamps required");
+
+    const returnsRef = ref(database, `${userUid}/returns`);
+    const returnsQuery = query(
+      returnsRef,
+      orderByKey(),
+      startAt(`${sttS}`),
+      endAt(`${endS}`),
+    );
+    const snapshot = await get(returnsQuery);
+
+    const headers = [
+      "Return No",
+      "Original Receipt No",
+      "Date",
+      "Time",
+      "Cashier",
+      "Returned Amount",
+      "Items",
+      "Discount Type",
+      "Names",
+      "IDs",
+      "TINs",
+    ];
+    const data: string[][] = [headers];
+
+    if (snapshot.exists()) {
+      snapshot.forEach((childSnapshot) => {
+        const returnData = childSnapshot.val();
+        const key = childSnapshot.key;
+        const txn = new Transaction({ key, val: returnData });
+        const returnAmount = Math.abs(
+          (txn.$amountDue || txn.original?.total || 0) / Transaction.MONEY_PRECISION,
+        );
+        const timestamp = parseInt(String(key), 10);
+
+        const rawItems = Array.isArray(returnData?.items)
+          ? returnData.items
+          : Object.values(returnData?.items || {});
+        const itemsList = rawItems
+          .filter((item: any) => item?.returned)
+          .map(
+            (item: any) =>
+              `${item?.title || "Item"} x${Math.abs(item?.quantity || 1)}`,
+          )
+          .join("; ");
+
+        const metadata = returnData?.seniorAndPwdMetadata || {};
+        const row = [
+          returnData?.returnNo || "",
+          returnData?.receiptNo || "",
+          Moment.unix(timestamp).format("MM/DD/YYYY"),
+          Moment.unix(timestamp).format("hh:mm:ss A"),
+          returnData?.cashier || "",
+          returnAmount.toFixed(2),
+          itemsList,
+          returnData?.transactionDiscountType || "",
+          metadata?.names || "",
+          metadata?.ids || "",
+          metadata?.tins || "",
+        ];
+        data.push(row);
+      });
+    }
+
+    const timeRange = exportUtils.formatTimeRange(sttS, endS);
+    const filename = `Returns Report ${timeRange.start} to ${timeRange.end}`;
+    const result = await exportUtils.downloadCsvFile(data, filename, {
+      trainingMode: (globalThis as any).isInTrainingMode || false,
+    });
+    return result;
+  } catch (error) {
+    console.error("Error in saveReturnsReport:", error);
+    alert(`Error generating returns report: ${error.message}`);
+    return null;
+  }
+}
+
 // Refunds report
 export async function saveRefunds(
   startDate?: string,
@@ -229,10 +316,47 @@ export async function saveRefunds(
   }
 }
 
-// Journal report
-export async function saveJournal(stt?: string, end?: string, upload = false) {
+// Get Z-Reading history for reprint (aligns with utakmobile)
+export async function getZReadingHistory(): Promise<Record<string, any>> {
   try {
-    console.log("saveJournal called", { stt, end, upload });
+    const userUid = getCurrentUserUid();
+    if (!userUid) return {};
+
+    const historyRef = ref(database, `${userUid}/zReadingHistory`);
+    const historyQuery = query(historyRef, orderByKey());
+    const snapshot = await get(historyQuery);
+    return snapshot.val() || {};
+  } catch (error) {
+    console.error("Error fetching Z-reading history:", error);
+    return {};
+  }
+}
+
+// Get X-Reading history for reprint (aligns with utakmobile)
+export async function getXReadingHistory(): Promise<Record<string, any>> {
+  try {
+    const userUid = getCurrentUserUid();
+    if (!userUid) return {};
+
+    const historyRef = ref(database, `${userUid}/xReadingHistory`);
+    const historyQuery = query(historyRef, orderByKey());
+    const snapshot = await get(historyQuery);
+    return snapshot.val() || {};
+  } catch (error) {
+    console.error("Error fetching X-reading history:", error);
+    return {};
+  }
+}
+
+// Journal report - supports type: 'all' | 'z' | 'x' (aligns with utakmobile)
+export async function saveJournal(
+  stt?: string,
+  end?: string,
+  upload = false,
+  type: "all" | "z" | "x" = "all",
+) {
+  try {
+    console.log("saveJournal called", { stt, end, upload, type });
 
     const userUid = getCurrentUserUid();
     if (!userUid) {
@@ -261,15 +385,25 @@ export async function saveJournal(stt?: string, end?: string, upload = false) {
     if (snapshot.exists()) {
       snapshot.forEach((childSnapshot) => {
         const journalData = childSnapshot.val();
-        journal += journalData.transaction || "";
-        journal += journalData.refund || "";
-        journal += journalData.xReading || "";
-        journal += journalData.zReading || "";
+        if (type === "z") {
+          journal += journalData.zReading || "";
+        } else if (type === "x") {
+          journal += journalData.xReading || "";
+        } else {
+          journal += journalData.transaction || "";
+          journal += journalData.refund || "";
+          journal += journalData.void || "";
+          journal += journalData.return || "";
+        }
       });
     }
 
     if (!journal.trim()) {
-      alert("No journal data found for the selected date range.");
+      const typeLabel =
+        type === "z" ? "Z-Reading " : type === "x" ? "X-Reading " : "";
+      alert(
+        `No ${typeLabel}journal data found for the selected date range.`,
+      );
       return null;
     }
 
@@ -277,7 +411,8 @@ export async function saveJournal(stt?: string, end?: string, upload = false) {
       parseInt(sttS),
       parseInt(endS),
     );
-    const filename = `BIR eSales Journal ${timeRange.start} to ${timeRange.end}.txt`;
+    const typeLabel = type === "z" ? "Z-Reading " : type === "x" ? "X-Reading " : "";
+    const filename = `BIR eSales ${typeLabel}Journal ${timeRange.start} to ${timeRange.end}.txt`;
 
     // Create and download text file
     const blob = new Blob([journal], { type: "text/plain;charset=utf-8" });
@@ -358,9 +493,11 @@ export async function saveSalesSummary(
         "TIN",
         settings.receiptDetails?.VATTIN
           ? `VAT REG TIN ${settings.receiptDetails.VATTIN}`
-          : "",
+          : settings.receiptDetails?.NONVATTIN
+            ? `NON VAT REG TIN ${settings.receiptDetails.NONVATTIN}`
+            : "",
       ],
-      ["Software", "UTAKPOS v2.01"],
+      ["Software", "UTAKPOS v1.0.0"],
       ["Serial No", settings.receiptDetails?.SN || ""],
       ["MIN", settings.receiptDetails?.MIN || ""],
       ["POS Terminal No", "1"],
@@ -370,6 +507,7 @@ export async function saveSalesSummary(
       ["", ""],
     ];
 
+    // BIR-compliant column headers (aligns with utakmobile mod_temp_bir/csvs/salesSummary.ts)
     const headerColumns = [
       "Date",
       `Beginning ${settings.receiptDetails?.receiptType || "OR"} No.`,
@@ -378,45 +516,72 @@ export async function saveSalesSummary(
       "Grand Accum. Beg Balance",
       "Gross Sales for the Day",
       "VATable Sales",
-      "VAT Amount",
       "VAT-Exempt Sales",
-      "Zero-Rated Sales",
+      "VAT Zero-Rated Sales",
+      "VAT Amount",
+      "Discounts",
       "Returns",
       "Voids",
       "Total Deductions",
+      "Adjustment on VAT: SC",
+      "Adjustment on VAT: PWD",
+      "Adjustment on VAT: Others",
+      "VAT on Return",
+      "Total VAT Adjustment",
       "VAT Payable",
       "Net Sales",
+      "Sales Overrun/Overflow",
+      "Reset Counter",
+      "Z-Counter",
       "Remarks",
     ];
 
-    // Simple sales summary calculation (this would need more complex logic in real implementation)
+    // Sales summary calculation (simplified - full BIR logic in utakmobile)
     const summaryRows = [];
     let totalSales = 0;
     let totalVAT = 0;
     let totalVatableSales = 0;
+    let totalVatExempt = 0;
+    let totalZeroRated = 0;
+    let totalDiscount = 0;
 
     transactions.forEach((txn) => {
       totalSales += txn.getDisplayValue("$netSales");
       totalVAT += txn.getDisplayValue("$vat");
       totalVatableSales += txn.getDisplayValue("$vatableSales");
+      totalVatExempt += txn.getDisplayValue("$vatExemptSales");
+      totalZeroRated += txn.getDisplayValue("$zeroRatedSales");
+      totalDiscount += txn.getDisplayValue("$discount");
     });
+
+    const firstReceipt = transactions[0]?.original?.receiptNo ?? "000001";
+    const lastReceipt = transactions[transactions.length - 1]?.original?.receiptNo ?? firstReceipt;
 
     summaryRows.push([
       Moment.unix(sttS).format("MM/DD/YYYY"),
-      1, // Beginning receipt number (would need actual implementation)
-      transactions.length, // Ending receipt number
+      String(firstReceipt).padStart(6, "0"),
+      String(lastReceipt).padStart(6, "0"),
       totalSales.toFixed(2),
-      0, // Beginning balance
+      0, // Grand Accum. Beg Balance
       totalSales.toFixed(2),
       totalVatableSales.toFixed(2),
+      totalVatExempt.toFixed(2),
+      totalZeroRated.toFixed(2),
       totalVAT.toFixed(2),
-      0, // VAT-Exempt
-      0, // Zero-Rated
+      totalDiscount.toFixed(2),
       0, // Returns
       0, // Voids
-      0, // Total Deductions
+      totalDiscount.toFixed(2), // Total Deductions
+      0, // Adjustment on VAT: SC
+      0, // Adjustment on VAT: PWD
+      0, // Adjustment on VAT: Others
+      0, // VAT on Return
+      0, // Total VAT Adjustment
       totalVAT.toFixed(2),
       (totalSales - totalVAT).toFixed(2),
+      "", // Sales Overrun/Overflow
+      (settings as any).BIRresetNo ?? "00",
+      (settings as any).zReadNo ?? 0,
       "",
     ]);
 
@@ -519,10 +684,14 @@ export async function saveSpecialDiscounts(
   }
 }
 
-// View journal (read-only)
-export async function viewJournal(stt?: string, end?: string) {
+// View journal (read-only) - supports type: 'all' | 'z' | 'x' (aligns with utakmobile)
+export async function viewJournal(
+  stt?: string,
+  end?: string,
+  type: "all" | "z" | "x" = "all",
+) {
   try {
-    console.log("viewJournal called", { stt, end });
+    console.log("viewJournal called", { stt, end, type });
 
     const userUid = getCurrentUserUid();
     if (!userUid) {
@@ -550,10 +719,16 @@ export async function viewJournal(stt?: string, end?: string) {
     if (snapshot.exists()) {
       snapshot.forEach((childSnapshot) => {
         const journalData = childSnapshot.val();
-        journal += journalData.transaction || "";
-        journal += journalData.refund || "";
-        journal += journalData.xReading || "";
-        journal += journalData.zReading || "";
+        if (type === "z") {
+          journal += journalData.zReading || "";
+        } else if (type === "x") {
+          journal += journalData.xReading || "";
+        } else {
+          journal += journalData.transaction || "";
+          journal += journalData.refund || "";
+          journal += journalData.void || "";
+          journal += journalData.return || "";
+        }
       });
     }
 
@@ -563,13 +738,6 @@ export async function viewJournal(stt?: string, end?: string) {
     return `Error loading journal: ${error.message}`;
   }
 }
-
-// Test FTP connection (web placeholder)
-// export async function testFtpAndNotify() {
-//   console.log('testFtpAndNotify called - FTP functionality not available in web environment');
-//   alert('FTP functionality is not available in the web environment. Files will be downloaded locally instead.');
-//   return false;
-// }
 
 // Print functions (web-compatible versions)
 export async function printZ(date?: string) {
@@ -629,10 +797,16 @@ export async function printZCustom(
   }
 }
 
-export async function printJournal(date?: string) {
+export async function printJournal(
+  stt?: string,
+  end?: string,
+  type: "all" | "z" | "x" = "all",
+) {
   console.log("printJournal called - Print functionality adapted for web");
   try {
-    const result = await saveJournal(date, date, false);
+    const date = stt || Moment().format("YYMMDD");
+    const endDate = end || date;
+    const result = await saveJournal(date, endDate, false, type);
     alert(
       "Journal has been downloaded. Please use your browser's print function if you need a physical copy.",
     );

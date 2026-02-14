@@ -3,7 +3,6 @@ import {
   saveZ,
   saveX,
   viewJournal,
-  testFtpAndNotify,
   saveJournal,
   saveSalesSummary,
   saveSpecialDiscounts,
@@ -15,13 +14,13 @@ import {
   printRefunds,
   saveRefunds,
   saveZCustom,
+  getZReadingHistory,
+  getXReadingHistory,
 } from "../hooks";
 import {
   Printer,
   Download,
-  Share2,
   Eye,
-  AlertCircle,
   Loader,
   BarChart3,
 } from "lucide-react";
@@ -48,8 +47,12 @@ export default function DailyTab() {
   const [endS, setEndS] = useState(Moment().endOf("day").toDate());
   const [loading, setLoading] = useState(false);
   const [isZReprint, setIsZReprint] = useState(false);
+  const [xReadingMode, setXReadingMode] = useState<"regular" | "history">("regular");
+  const [journalType, setJournalType] = useState<"all" | "z" | "x">("all");
   const [journalData, setJournalData] = useState<string | null>(null);
   const [showJournalModal, setShowJournalModal] = useState(false);
+  const [zHistoryModal, setZHistoryModal] = useState<{ open: boolean; data: any[] }>({ open: false, data: [] });
+  const [xHistoryModal, setXHistoryModal] = useState<{ open: boolean; data: any[] }>({ open: false, data: [] });
 
   // Chart-related state
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -110,15 +113,46 @@ export default function DailyTab() {
     fetchTransactionData();
   }, [fetchTransactionData]);
 
-  // Z-Reading handlers
+  // Z-Reading handlers (aligns with utakmobile)
+  const handleOpenZHistory = async () => {
+    try {
+      setLoading(true);
+      const history = await getZReadingHistory();
+      const historyArray = Object.keys(history)
+        .map((key) => ({ ...history[key], key }))
+        .sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
+      setZHistoryModal({ open: true, data: historyArray });
+    } catch (e) {
+      alert("Failed to load Z-Reading history: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handlePrintZ = async () => {
     try {
       setLoading(true);
       if (isZReprint) {
-        await printZCustom(Moment(sttS).format("X"), Moment(endS).format("X"));
-      } else {
-        await printZ(Moment(sttS).format("YYMMDD"));
+        await handleOpenZHistory();
+        return;
       }
+      await printZ(Moment(sttS).format("YYMMDD"));
+    } catch (e) {
+      alert("Error: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReprintZFromHistory = async (item: any) => {
+    try {
+      setLoading(true);
+      setZHistoryModal({ open: false, data: [] });
+      // Web: regenerate Z-reading for the history item's date
+      const ts = item.generatedAt || parseInt(item.key, 10) || Moment().unix();
+      const startX = Moment.unix(ts).startOf("day").format("X");
+      const endX = Moment.unix(ts).endOf("day").format("X");
+      await printZCustom(startX, endX);
     } catch (e) {
       alert("Error: " + e);
     } finally {
@@ -145,14 +179,47 @@ export default function DailyTab() {
     }
   };
 
-  // X-Reading handlers
+  // X-Reading handlers (aligns with utakmobile - Regular vs Reprint History)
+  const handleOpenXHistory = async () => {
+    try {
+      setLoading(true);
+      const history = await getXReadingHistory();
+      const historyArray = Object.keys(history)
+        .map((key) => ({ ...history[key], key }))
+        .sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
+      setXHistoryModal({ open: true, data: historyArray });
+    } catch (e) {
+      alert("Failed to load X-Reading history: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handlePrintX = async () => {
     try {
       setLoading(true);
+      if (xReadingMode === "history") {
+        await handleOpenXHistory();
+        return;
+      }
       await printX(
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
       );
+    } catch (e) {
+      alert("Error: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReprintXFromHistory = async (item: any) => {
+    try {
+      setLoading(true);
+      setXHistoryModal({ open: false, data: [] });
+      const ts = item.generatedAt || parseInt(item.key, 10) || Moment().unix();
+      const dateStr = Moment.unix(ts).format("YYMMDD");
+      await printX(dateStr, dateStr);
     } catch (e) {
       alert("Error: " + e);
     } finally {
@@ -214,13 +281,14 @@ export default function DailyTab() {
     }
   };
 
-  // Journal handlers
+  // Journal handlers (with type: all | z | x - aligns with utakmobile)
   const handleViewJournal = async () => {
     try {
       setLoading(true);
       const data = await viewJournal(
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
+        journalType,
       );
       setJournalData(data);
       setShowJournalModal(true);
@@ -238,6 +306,7 @@ export default function DailyTab() {
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
         upload,
+        journalType,
       );
     } catch (e) {
       alert("Error: " + e);
@@ -249,7 +318,11 @@ export default function DailyTab() {
   const handlePrintJournal = async () => {
     try {
       setLoading(true);
-      await printJournal(Moment(sttS).format("YYMMDD"));
+      await printJournal(
+        Moment(sttS).format("YYMMDD"),
+        Moment(endS).format("YYMMDD"),
+        journalType,
+      );
     } catch (e) {
       alert("Error: " + e);
     } finally {
@@ -400,7 +473,7 @@ export default function DailyTab() {
         </div>
       )}
 
-      {/* Z-Reading Section */}
+      {/* Z-Reading Section (aligns with utakmobile) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4 text-gray-800">Z-Reading</h3>
 
@@ -413,7 +486,7 @@ export default function DailyTab() {
                 : "bg-gray-200 text-gray-800 hover:bg-gray-300"
             }`}
           >
-            Regular Z-Reading
+            Regular
           </button>
           <button
             onClick={() => setIsZReprint(true)}
@@ -423,11 +496,11 @@ export default function DailyTab() {
                 : "bg-gray-200 text-gray-800 hover:bg-gray-300"
             }`}
           >
-            Z-Reading Reprint
+            Reprint History
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <SectionButton
             icon={Printer}
             label="Print"
@@ -443,10 +516,34 @@ export default function DailyTab() {
         </div>
       </div>
 
-      {/* X-Reading Section */}
+      {/* X-Reading Section (aligns with utakmobile - Regular vs Reprint History) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4 text-gray-800">X-Reading</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+        <div className="mb-4 flex gap-2">
+          <button
+            onClick={() => setXReadingMode("regular")}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              xReadingMode === "regular"
+                ? "bg-utak-darkseagreen text-white"
+                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+            }`}
+          >
+            Regular
+          </button>
+          <button
+            onClick={() => setXReadingMode("history")}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              xReadingMode === "history"
+                ? "bg-utak-darkseagreen text-white"
+                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+            }`}
+          >
+            Reprint History
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <SectionButton
             icon={Printer}
             label="Print"
@@ -475,12 +572,12 @@ export default function DailyTab() {
         </div>
       </div>
 
-      {/* Refund Report Section */}
+      {/* Refund Report Section (aligns with utakmobile) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4 text-gray-800">
           Refund Report
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <SectionButton
             icon={Printer}
             label="Print"
@@ -496,12 +593,46 @@ export default function DailyTab() {
         </div>
       </div>
 
-      {/* BIR eJournal Section */}
+      {/* BIR eJournal Section (aligns with utakmobile - Transaction/Z-READ/X-READ) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4 text-gray-800">
           BIR eJournal
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+
+        <div className="mb-4 flex gap-2">
+          <button
+            onClick={() => setJournalType("all")}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              journalType === "all"
+                ? "bg-utak-darkseagreen text-white"
+                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+            }`}
+          >
+            Transaction
+          </button>
+          <button
+            onClick={() => setJournalType("z")}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              journalType === "z"
+                ? "bg-utak-darkseagreen text-white"
+                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+            }`}
+          >
+            Z-READ
+          </button>
+          <button
+            onClick={() => setJournalType("x")}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              journalType === "x"
+                ? "bg-utak-darkseagreen text-white"
+                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+            }`}
+          >
+            X-READ
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <SectionButton
             icon={Eye}
             label="VIEW"
@@ -510,7 +641,7 @@ export default function DailyTab() {
           />
           <SectionButton
             icon={Printer}
-            label="Print"
+            label="PRINT"
             onClick={handlePrintJournal}
             variant="primary"
           />
@@ -523,61 +654,163 @@ export default function DailyTab() {
         </div>
       </div>
 
-      {/* Sales Summary Section */}
+      {/* Sales Summary Section (aligns with utakmobile) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4 text-gray-800">
           Sales Summary Report
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <SectionButton
             icon={Download}
-            label="Excel"
+            label="XLSX"
             onClick={() => handleSaveSalesSummary(false)}
-            variant="success"
+            variant="primary"
           />
         </div>
       </div>
 
-      {/* Special Discounts Section */}
+      {/* Special Discounts Section (aligns with utakmobile) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4 text-gray-800">
           Special Discounts Report
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <SectionButton
             icon={Download}
-            label="Excel"
+            label="XLSX"
             onClick={() => handleSaveSpecialDiscounts(false)}
-            variant="success"
+            variant="primary"
           />
         </div>
       </div>
 
-      {/* FTP Test Section */}
-      {/* <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-        <h3 className="text-lg font-semibold mb-4 text-gray-800">
-          FTP Connection
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <SectionButton
-            icon={AlertCircle}
-            label="Test FTP"
-            onClick={testFtpAndNotify}
-            variant="secondary"
-          />
+      {/* Z-Reading History Modal */}
+      {zHistoryModal.open && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-auto">
+            <div className="flex justify-between items-center p-6 border-b border-gray-200 sticky top-0 bg-white">
+              <div>
+                <h2 className="text-xl font-bold">Z-Reading History</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  Select a Z-Reading to reprint
+                </p>
+              </div>
+              <button
+                onClick={() => setZHistoryModal({ open: false, data: [] })}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6 max-h-96 overflow-y-auto">
+              {zHistoryModal.data.length > 0 ? (
+                <div className="space-y-3">
+                  {zHistoryModal.data.map((item: any, index: number) => (
+                    <button
+                      key={item.key || index}
+                      onClick={() => handleReprintZFromHistory(item)}
+                      className="w-full text-left p-4 border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-utak-darkseagreen transition-colors"
+                    >
+                      <div className="font-semibold text-utak-darkseagreen">
+                        Z-Read #{item.zReadNo ?? "—"}
+                      </div>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Generated:{" "}
+                        {Moment.unix(item.generatedAt || 0).format(
+                          "MMM DD, YYYY hh:mm A",
+                        )}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        Date Range: {item.dateRange || "—"}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        Cashier: {item.cashier || "N/A"}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-gray-500 py-8">
+                  No Z-Reading history found.
+                  <br />
+                  Generate a Z-Reading first to see it here.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
-        <p className="text-sm text-gray-600 mt-2">
-          Note: FTP functionality is not available in web environment. Files
-          will be downloaded locally instead.
-        </p>
-      </div> */}
+      )}
+
+      {/* X-Reading History Modal */}
+      {xHistoryModal.open && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-auto">
+            <div className="flex justify-between items-center p-6 border-b border-gray-200 sticky top-0 bg-white">
+              <div>
+                <h2 className="text-xl font-bold">X-Reading History</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  Select an X-Reading to reprint
+                </p>
+              </div>
+              <button
+                onClick={() => setXHistoryModal({ open: false, data: [] })}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6 max-h-96 overflow-y-auto">
+              {xHistoryModal.data.length > 0 ? (
+                <div className="space-y-3">
+                  {xHistoryModal.data.map((item: any, index: number) => (
+                    <button
+                      key={item.key || index}
+                      onClick={() => handleReprintXFromHistory(item)}
+                      className="w-full text-left p-4 border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-utak-darkseagreen transition-colors"
+                    >
+                      <div className="font-semibold text-utak-darkseagreen">
+                        X-Reading
+                      </div>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Generated:{" "}
+                        {Moment.unix(item.generatedAt || 0).format(
+                          "MMM DD, YYYY hh:mm A",
+                        )}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        Date: {item.dateRange || "—"}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        Cashier: {item.cashier || "N/A"}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-gray-500 py-8">
+                  No X-Reading history found.
+                  <br />
+                  Generate an X-Reading first to see it here.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Journal Modal */}
       {showJournalModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-2xl w-full max-h-96 overflow-auto">
             <div className="flex justify-between items-center p-6 border-b border-gray-200 sticky top-0 bg-white">
-              <h2 className="text-xl font-bold">BIR eJournal</h2>
+              <h2 className="text-xl font-bold">
+                BIR eJournal{" "}
+                {journalType === "z"
+                  ? "(Z-READ)"
+                  : journalType === "x"
+                    ? "(X-READ)"
+                    : "(Transactions)"}
+              </h2>
               <button
                 onClick={() => setShowJournalModal(false)}
                 className="text-gray-500 hover:text-gray-700"

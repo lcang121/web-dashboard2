@@ -157,6 +157,7 @@ export function getUserSettings() {
     address: 'Business Address',
     receiptDetails: {
       VATTIN: '000-000-000-000',
+      NONVATTIN: '',
       SN: 'SN123456',
       MIN: 'MIN123456',
       receiptType: 'OR'

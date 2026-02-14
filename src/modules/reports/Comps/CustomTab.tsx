@@ -9,7 +9,7 @@ import {
   printJournal,
 } from "../hooks";
 import Moment from "moment-timezone";
-import { Download, Share2, Loader, Eye, Printer } from "lucide-react";
+import { Download, Loader, Eye, Printer } from "lucide-react";
 
 export default function CustomTab() {
   const [sttS, setSttS] = useState(
@@ -240,12 +240,6 @@ export default function CustomTab() {
             onClick={() => handleSaveSalesSummary(false)}
             variant="success"
           />
-          <SectionButton
-            icon={Share2}
-            label="Upload to FTP"
-            onClick={() => handleSaveSalesSummary(true)}
-            variant="secondary"
-          />
         </div>
       </div>
 
@@ -260,12 +254,6 @@ export default function CustomTab() {
             label="Excel"
             onClick={() => handleSaveSpecialDiscounts(false)}
             variant="success"
-          />
-          <SectionButton
-            icon={Share2}
-            label="Upload to FTP"
-            onClick={() => handleSaveSpecialDiscounts(true)}
-            variant="secondary"
           />
         </div>
       </div>

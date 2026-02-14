@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { saveTransactions } from '../hooks';
+import { saveReturnsReport } from '../hooks';
 import Moment from 'moment-timezone';
 import { Menu, Download, Loader } from 'lucide-react';
 import { ref, query, orderByKey, startAt, endAt, onValue, off } from 'firebase/database';
@@ -39,10 +39,10 @@ export default function ReturnsTab() {
 
     setReturnsData(v => ({ ...v, loading: true }));
 
-    // Create query for returns within date range (using transactions collection with negative quantities)
-    const transactionsRef = ref(database, `${user.uid}/transactions`);
-    const transactionsQuery = query(
-      transactionsRef,
+    // Create query for returns within date range (aligns with utakmobile - uses returns collection)
+    const returnsRef = ref(database, `${user.uid}/returns`);
+    const returnsQuery = query(
+      returnsRef,
       orderByKey(),
       startAt(`${sttS}`),
       endAt(`${endS}`)
@@ -53,33 +53,28 @@ export default function ReturnsTab() {
       const returns: Transaction[] = [];
       if (snapshot.exists()) {
         const data = snapshot.val();
-        // Iterate through transactions and find returns (transactions with negative quantities)
         Object.entries(data).forEach(([key, val]) => {
-          const transaction = new Transaction({ key: parseInt(key), val });
-          // Check if this transaction has returned items (negative quantities)
-          const hasReturns = transaction.items.some(item => item && item.quantity < 0);
-          if (hasReturns) {
-            returns.unshift(transaction); // Sort in reverse (newest first)
-          }
+          if ((val as any)?.trainingMode) return;
+          const transaction = new Transaction({ key: parseInt(key), val: val as any });
+          returns.unshift(transaction); // Sort in reverse (newest first)
         });
       }
       setReturnsData({ loading: false, value: returns });
     }, 500);
 
     // Listen for value changes
-    onValue(transactionsQuery, handleReturnsUpdate);
+    onValue(returnsQuery, handleReturnsUpdate);
 
     // Cleanup listener on unmount or when dependencies change
     return () => {
-      off(transactionsQuery, 'value', handleReturnsUpdate);
+      off(returnsQuery, 'value', handleReturnsUpdate);
     };
   }, [sttS, endS, user?.uid]);
 
   const handleDownload = async () => {
     try {
       setDownloadLoading(true);
-      // Use saveTransactions with isManual=false for returns (they'll be filtered on the server side)
-      await saveTransactions(sttS, endS, false);
+      await saveReturnsReport(sttS, endS, false);
     } catch (error) {
       console.error('Error downloading returns report:', error);
       alert('Error downloading report: ' + error);
