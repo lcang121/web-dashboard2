@@ -299,7 +299,7 @@ export async function saveX(
       .format("X");
 
     // Generate X reading CSV data
-    const xData = exportUtils.generateXCsv(startDate, endDate);
+    const xData = await exportUtils.generateXCsv(startDate, endDate);
     const timeRange = exportUtils.formatTimeRange(
       parseInt(sttS),
       parseInt(endS),
@@ -332,7 +332,7 @@ export async function saveZ(date?: string, upload = false) {
     const sttS = Moment(date, "YYMMDD").startOf("day").format("X");
     const endS = Moment(date, "YYMMDD").endOf("day").format("X");
 
-    const zData = exportUtils.generateZCsv(date);
+    const zData = await exportUtils.generateZCsv(date);
     const timeRange = exportUtils.formatTimeRange(
       parseInt(sttS),
       parseInt(endS),
@@ -368,8 +368,7 @@ export async function saveZCustom(
     const sttS = Moment(startDate, "YYMMDD").startOf("day").unix();
     const endS = Moment(endDate, "YYMMDD").endOf("day").unix();
 
-    // For now, use the same logic as regular Z reading
-    const zData = exportUtils.generateZCsv(`${startDate}-${endDate}`);
+    const zData = await exportUtils.generateZCsv(startDate, endDate);
     const timeRange = exportUtils.formatTimeRange(sttS, endS);
     const filename = `ZReading Custom ${timeRange.start} to ${timeRange.end}`;
 
