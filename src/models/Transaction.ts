@@ -1,205 +1,182 @@
-// Web-compatible Transaction model based on mobile implementation
-// This provides the same structure and calculated properties as the mobile Transaction model
+// TypeScript port of mobile Transaction.js — keep in sync with utakmobileBIR
+import TransactionItem, { TransactionItemValue } from './TransactionItem';
 
-export interface TransactionItem {
-  key?: number | string;
-  quantity: number;
-  price: number;
-  discount?: number;
-  service?: number;
-  vatType?: 'vatable' | 'vatExempt' | 'zeroRated';
-  transactionDiscountType?: string;
-  discountSubtotal?: number;
-  original?: any;
-}
+const roundableItemProps = ['$amountDue', '__itmTotal'] as const;
 
-export interface TransactionPayment {
-  type: string;
-  value: number;
-}
+const summableItemProps = [
+  '$baseSales', '$grossSales', '$itmDiscount', '$txnDiscount', '$discount',
+  '$service', '$subtotal', '$netSales', '$total', '$vat', '$vatableSales',
+  '$vatExemptSales', '$zeroRatedSales',
+  'itmDiscount', 'vatExemption', 'txnDiscount', 'quantity', 'totalCost',
+  '__txnVatExemption',
+  ...roundableItemProps,
+] as const;
 
-export interface RawTransactionData {
-  items?: { [key: string]: any } | any[];
-  total?: number;
-  totalCost?: number;
+export interface TransactionValue {
+  items?: Record<string, TransactionItemValue> | TransactionItemValue[];
+  total?: number | string;
+  totalCost?: number | string;
   paymentType?: string;
   paymentReceived?: number;
-  payments?: { [key: string]: number };
-  service?: number;
-  discount?: number;
-  manualReference?: string;
-  receiptNo?: string;
+  payments?: Record<string, number>;
   [key: string]: any;
 }
 
-export class Transaction {
-  static readonly MONEY_PRECISION = 10000;
+class Transaction {
+  static readonly MONEY_PRECISION = TransactionItem.MONEY_PRECISION;
 
-  public key: number | string | null;
-  public original: RawTransactionData;
-  public paymentType: string;
-  public items: TransactionItem[];
-  public payments: TransactionPayment[];
-  public total: number;
-  public totalCost: number;
+  key: number | string | null;
+  original: Record<string, any>;
+  paymentType: string;
+  payments: { type: string; value: number }[];
 
-  // Computed properties (similar to mobile version)
-  public $amountDue: number = 0;
-  public $service: number = 0;
-  public $discount: number = 0;
-  public $netSales: number = 0;
-  public $grossSales: number = 0;
-  public $baseSales: number = 0;
-  public $vat: number = 0;
-  public $vatableSales: number = 0;
-  public $vatExemptSales: number = 0;
-  public $zeroRatedSales: number = 0;
-  public $subtotal: number = 0;
+  // Summed from items
+  $baseSales: number = 0;
+  $grossSales: number = 0;
+  $itmDiscount: number = 0;
+  $txnDiscount: number = 0;
+  $discount: number = 0;
+  $service: number = 0;
+  $subtotal: number = 0;
+  $netSales: number = 0;
+  $total: number = 0;
+  $vat: number = 0;
+  $vatableSales: number = 0;
+  $vatExemptSales: number = 0;
+  $zeroRatedSales: number = 0;
+  itmDiscount: number = 0;
+  vatExemption: number = 0;
+  txnDiscount: number = 0;
+  quantity: number = 0;
+  totalCost: number = 0;
+  __txnVatExemption: number = 0;
+  $amountDue: number = 0;
+  __itmTotal: number = 0;
 
-  constructor({ val, key = null }: { val: RawTransactionData; key?: number | string | null }) {
+  svcRate: number = 0;
+  txnDiscType: string = 'regular';
+  txnDiscRate: number = 0;
+  _defaultVatType: string | undefined;
+
+  total!: number;
+  _total!: number;
+  _totalCost!: number;
+
+  private _items!: (TransactionItem | null)[];
+
+  constructor({ val, key = null, ...opts }: { val: TransactionValue; key?: number | string | null; [k: string]: any }) {
     this.key = key;
     this.original = JSON.parse(JSON.stringify(val));
     this.paymentType = val.paymentType || 'Cash';
 
-    // Process items
-    this.items = [];
+    const items: (TransactionItem | null)[] = [];
     const rawItems = val.items || {};
+    const itemOpts = (opts as any).itemOpts || {};
+
     if (Array.isArray(rawItems)) {
-      rawItems.forEach((item, index) => {
-        if (item && typeof item === 'object') {
-          this.items.push(this.processItem(item, index));
-        }
+      rawItems.forEach((item, i) => {
+        items[i] = item && typeof item === 'object'
+          ? new TransactionItem({ ...itemOpts, val: item, key: i })
+          : null;
       });
-    } else if (typeof rawItems === 'object') {
-      Object.entries(rawItems).forEach(([key, item]) => {
-        if (item && typeof item === 'object') {
-          this.items.push(this.processItem(item, key));
-        }
-      });
-    }
-
-    // Set totals
-    this.total = val.total ? this.round(this.moneyOrZero(val.total)) : 0;
-    this.totalCost = val.totalCost ? this.moneyOrZero(val.totalCost) : 0;
-
-    // Process payments
-    this.payments = Object.entries(val.payments || {}).map(([key, val]) => ({
-      type: key,
-      value: this.total && this.round(this.moneyOrZero(val)),
-    }));
-
-    // Calculate computed properties
-    this.calculateComputedProperties();
-  }
-
-  private processItem(rawItem: any, key: number | string): TransactionItem {
-    return {
-      key,
-      quantity: parseFloat(rawItem.quantity) || 1,
-      price: this.moneyOrZero(rawItem.price),
-      discount: this.moneyOrZero(rawItem.discount),
-      service: this.moneyOrZero(rawItem.service),
-      vatType: rawItem.vatType || 'vatable',
-      transactionDiscountType: rawItem.transactionDiscountType,
-      discountSubtotal: parseFloat(rawItem.discountSubtotal) || 0,
-      original: rawItem,
-    };
-  }
-
-  private calculateComputedProperties() {
-    // Reset computed properties
-    this.$service = 0;
-    this.$discount = 0;
-    this.$netSales = 0;
-    this.$grossSales = 0;
-    this.$baseSales = 0;
-    this.$vat = 0;
-    this.$vatableSales = 0;
-    this.$vatExemptSales = 0;
-    this.$zeroRatedSales = 0;
-    this.$subtotal = 0;
-
-    // Calculate from items
-    for (const item of this.items) {
-      const itemTotal = (item.price * item.quantity);
-      const itemDiscount = item.discount || 0;
-      const itemService = item.service || 0;
-      const itemNet = itemTotal - itemDiscount + itemService;
-
-      this.$subtotal += itemTotal;
-      this.$discount += itemDiscount;
-      this.$service += itemService;
-
-      // VAT calculations based on item type
-      switch (item.vatType) {
-        case 'vatable':
-          const vatableAmount = itemNet / 1.12; // Assuming 12% VAT
-          this.$vatableSales += vatableAmount;
-          this.$vat += (itemNet - vatableAmount);
-          break;
-        case 'vatExempt':
-          this.$vatExemptSales += itemNet;
-          break;
-        case 'zeroRated':
-          this.$zeroRatedSales += itemNet;
-          break;
-      }
-
-      this.$netSales += itemNet;
-    }
-
-    // Final calculations
-    this.$grossSales = this.$vatableSales + this.$vatExemptSales + this.$zeroRatedSales;
-    this.$baseSales = this.$grossSales + this.$discount;
-    this.$amountDue = this.$netSales;
-
-    // Round all money values
-    this.$amountDue = this.round(this.$amountDue);
-    this.$service = this.round(this.$service);
-    this.$discount = this.round(this.$discount);
-    this.$netSales = this.round(this.$netSales);
-    this.$grossSales = this.round(this.$grossSales);
-    this.$baseSales = this.round(this.$baseSales);
-    this.$vat = this.round(this.$vat);
-    this.$vatableSales = this.round(this.$vatableSales);
-    this.$vatExemptSales = this.round(this.$vatExemptSales);
-    this.$zeroRatedSales = this.round(this.$zeroRatedSales);
-    this.$subtotal = this.round(this.$subtotal);
-
-    // If we have an explicit total from the original data, use that
-    if (this.original.total) {
-      this.total = this.round(this.moneyOrZero(this.original.total));
-      this.$amountDue = this.total;
     } else {
-      this.total = this.$amountDue;
+      for (const [k, item] of Object.entries(rawItems)) {
+        const idx = parseInt(k, 10);
+        items[isNaN(idx) ? items.length : idx] = item && typeof item === 'object'
+          ? new TransactionItem({ ...itemOpts, val: item as TransactionItemValue, key: isNaN(idx) ? k : idx })
+          : null;
+      }
     }
+    this.items = items;
+
+    if ('total' in val) {
+      this.total = TransactionItem.round(TransactionItem.moneyOrZero(val.total));
+    }
+    if ('totalCost' in val) {
+      this.totalCost = TransactionItem.moneyOrZero(val.totalCost as any);
+    }
+
+    this.payments = Object.entries(val.payments || {}).map(([k, v]) => ({
+      type: k,
+      value: this.total && TransactionItem.round(TransactionItem.moneyOrZero(v)),
+    }));
   }
 
-  // Helper methods (similar to mobile Item class)
-  private moneyOrZero(value: any): number {
-    const num = parseFloat(value);
-    return isNaN(num) ? 0 : num * Transaction.MONEY_PRECISION;
+  get items(): (TransactionItem | null)[] {
+    return this._items;
   }
 
-  private round(value: number): number {
-    return Math.round(value);
+  set items(v: (TransactionItem | null)[]) {
+    const canCollapse = ~v.findIndex(Boolean);
+    if (canCollapse) {
+      const wontCollapse = ~v.findIndex(
+        item =>
+          item &&
+          (item.quantity < 0 ||
+            'refund' in item.original ||
+            'refunded' in item.original ||
+            'index' in item.original)
+      );
+      if (!wontCollapse) v = v.filter(Boolean) as (TransactionItem | null)[];
+    }
+    v = v.map((item, i) => {
+      if (!item) return null;
+      item.key = i;
+      return item;
+    });
+
+    for (const k of summableItemProps) (this as any)[k] = 0;
+    this.svcRate = 0;
+    this.txnDiscType = 'regular';
+    this.txnDiscRate = 0;
+    this._defaultVatType = undefined;
+
+    for (const item of v) {
+      if (!item) continue;
+      for (const k of summableItemProps) (this as any)[k] += (item as any)[k];
+      this.svcRate = item.svcRate;
+      this.txnDiscType = item.txnDiscType;
+      this.txnDiscRate = item.txnDiscRate;
+      this._defaultVatType = item._defaultVatType;
+    }
+    for (const k of roundableItemProps) (this as any)[k] = TransactionItem.round((this as any)[k]);
+
+    if (v.find(Boolean)?._parts) {
+      this.$amountDue = TransactionItem.round(this.$baseSales - this.discount + this.$service);
+    }
+    this.total = this.$amountDue;
+
+    this._items = v;
+    this._total = this.total;
+    this._totalCost = this.totalCost;
   }
 
-  // Getters for compatibility with mobile version
+  get defaultVatType(): string {
+    return this._defaultVatType || 'vatable';
+  }
+
+  get discount(): number {
+    const firstItem = this._items?.find(Boolean);
+    if (firstItem?._parts) {
+      return this._items.reduce((a, item) => a + (item?._parts?.discount ?? 0), 0);
+    }
+    return this.itmDiscount + this.txnDiscount;
+  }
+
+  get __txnEffDisc(): number {
+    return TransactionItem.round(this.__txnVatExemption + this.txnDiscount);
+  }
+
   get service(): number {
     return this.$service;
   }
 
-  get discount(): number {
-    return this.$discount;
-  }
-
   get netSales(): number {
-    return this.$netSales;
+    return this.$netSales + this.$vat;
   }
 
   get grossSales(): number {
-    return this.$grossSales;
+    return this.$baseSales - this.vatExemption;
   }
 
   get vat(): number {
@@ -207,38 +184,20 @@ export class Transaction {
   }
 
   get paymentReceived(): number {
-    return this.round(
-      Transaction.MONEY_PRECISION * (this.original.paymentReceived || 0) ||
-        this.total ||
-        0
+    return TransactionItem.round(
+      TransactionItem.MONEY_PRECISION * (this.original.paymentReceived || 0) || this.total || 0
     );
   }
 
-  // Static helper methods
-  static createFromFirebaseData(key: string | number, val: any): Transaction {
-    return new Transaction({ key, val });
-  }
-
-  static createFromPlainObject(data: any): Transaction {
-    return new Transaction({
-      key: data.key,
-      val: data
-    });
-  }
-
-  // Helper to convert to display format (dividing by MONEY_PRECISION)
-  getDisplayValue(property: keyof Transaction): number {
-    const value = this[property] as number;
+  getDisplayValue(property: string): number {
+    const value = (this as any)[property];
+    if (typeof value !== 'number') return 0;
     return value / Transaction.MONEY_PRECISION;
   }
 
-  // Get formatted currency display
-  getFormattedCurrency(property: keyof Transaction): string {
+  getFormattedCurrency(property: string): string {
     const value = this.getDisplayValue(property);
-    return '₱' + value.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    });
+    return '₱' + value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 }
 
