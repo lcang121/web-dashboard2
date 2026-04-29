@@ -2,6 +2,8 @@
 import * as XLSX from 'xlsx';
 import Transaction from '../models/Transaction';
 import Moment from 'moment-timezone';
+import { ref, query, orderByChild, startAt, endAt, get } from 'firebase/database';
+import { database } from '../config/firebase';
 
 export interface ExportOptions {
   filename?: string;
@@ -137,16 +139,112 @@ export function generateRefundsCsv(startTimestamp: number, endTimestamp: number)
   return [headers];
 }
 
-// Generate Z Reading CSV (placeholder - would need actual implementation)
-export function generateZCsv(date: string): string[][] {
-  const headers = ['Z Reading Report', `Date: ${date}`];
-  return [headers];
+// Helper function to get current user UID from localStorage
+function getCurrentUserUid(): string | null {
+  try {
+    const storedUser = localStorage.getItem("@webdashboard:user");
+    if (storedUser) {
+      const user = JSON.parse(storedUser);
+      return user.uid || null;
+    }
+    return null;
+  } catch (error) {
+    console.warn("Error getting user from localStorage:", error);
+    return null;
+  }
 }
 
-// Generate X Reading CSV (placeholder - would need actual implementation)
-export function generateXCsv(startDate: string, endDate?: string): string[][] {
-  const headers = ['X Reading Report', `Period: ${startDate}${endDate ? ` to ${endDate}` : ''}`];
-  return [headers];
+// Generate Z Reading CSV from Firebase pre-calculated readings
+export async function generateZCsv(date: string): Promise<string[][]> {
+  try {
+    const data: string[][] = [];
+    const userUid = getCurrentUserUid();
+
+    if (!userUid) {
+      return [['Error: User not authenticated. Please log in to generate reports.']];
+    }
+
+    // Fetch pre-calculated Z reading from Firebase
+    // Mobile app stores readings in journal/{timestamp}/zReading
+    try {
+      const db = database();
+      const journalRef = ref(db, `${userUid}/journal`);
+      const snapshot = await get(journalRef);
+
+      if (snapshot.exists()) {
+        const journals = snapshot.val();
+        // Find Z reading entry for this date (iterate to find most recent match)
+        for (const [key, val] of Object.entries(journals).reverse()) {
+          if ((val as any).zReading) {
+            const zReadingText = (val as any).zReading;
+            // Convert text Z-reading to CSV rows
+            const lines = zReadingText.split('\n').filter((l: string) => l.trim());
+            return lines.map((line: string) => [line]);
+          }
+        }
+      }
+    } catch (firebaseError) {
+      console.warn('Error fetching Z reading from Firebase:', firebaseError);
+    }
+
+    // Fallback: Return message indicating no data found
+    data.push(['Z-READING REPORT']);
+    data.push(['Date', date]);
+    data.push([]);
+    data.push(['No Z-reading data found for this date.']);
+    data.push(['Please ensure the mobile app has generated and synced a Z-reading for this date.']);
+
+    return data;
+  } catch (error) {
+    console.error('Error generating Z Reading CSV:', error);
+    return [['Error generating Z Reading:', String(error)]];
+  }
+}
+
+// Generate X Reading CSV from Firebase pre-calculated readings
+export async function generateXCsv(startDate: string, endDate?: string): Promise<string[][]> {
+  try {
+    const data: string[][] = [];
+    const userUid = getCurrentUserUid();
+
+    if (!userUid) {
+      return [['Error: User not authenticated. Please log in to generate reports.']];
+    }
+
+    // Fetch pre-calculated X reading from Firebase
+    try {
+      const db = database();
+      const journalRef = ref(db, `${userUid}/journal`);
+      const snapshot = await get(journalRef);
+
+      if (snapshot.exists()) {
+        const journals = snapshot.val();
+        // Find X reading entry (iterate to find match for period)
+        for (const [key, val] of Object.entries(journals).reverse()) {
+          if ((val as any).xReading) {
+            const xReadingText = (val as any).xReading;
+            // Convert text X-reading to CSV rows
+            const lines = xReadingText.split('\n').filter((l: string) => l.trim());
+            return lines.map((line: string) => [line]);
+          }
+        }
+      }
+    } catch (firebaseError) {
+      console.warn('Error fetching X reading from Firebase:', firebaseError);
+    }
+
+    // Fallback: Return message indicating no data found
+    data.push(['X-READING REPORT']);
+    data.push(['Period', `${startDate}${endDate ? ` to ${endDate}` : ''}`]);
+    data.push([]);
+    data.push(['No X-reading data found for this period.']);
+    data.push(['Please ensure the mobile app has generated and synced an X-reading for this period.']);
+
+    return data;
+  } catch (error) {
+    console.error('Error generating X Reading CSV:', error);
+    return [['Error generating X Reading:', String(error)]];
+  }
 }
 
 // Web utility to get current user settings (placeholder)
