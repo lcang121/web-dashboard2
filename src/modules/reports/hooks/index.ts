@@ -1,8 +1,63 @@
 import { ref, query, orderByKey, startAt, endAt, get } from "firebase/database";
 import { database } from "../../../config/firebase";
 import Transaction from "../../../models/Transaction";
+import TransactionItem from "../../../models/TransactionItem";
 import exportUtils from "../../../utils/exportUtils";
 import Moment from "moment-timezone";
+
+const MP = Transaction.MONEY_PRECISION;
+
+// Normalized discount types matching BIR requirements
+function normalizeDiscountType(type?: string): string {
+  const t = String(type || "").trim().toLowerCase();
+  if (!t) return "";
+  if (["sc", "senior", "seniorcitizen", "senior_citizen"].includes(t)) return "senior";
+  if (["pwd", "personwithdisability", "person_with_disability"].includes(t)) return "pwd";
+  if (["sp", "soloparent", "solo_parent"].includes(t)) return "soloParent";
+  if (["ntl", "ntlathlete", "naac", "nationalathlete"].includes(t)) return "ntlAthlete";
+  if (["diplomat"].includes(t)) return "diplomat";
+  if (["commodity"].includes(t)) return "commodity";
+  if (["regular"].includes(t)) return "regular";
+  return String(type || "");
+}
+
+function mapPaxDiscType(discType?: string): string {
+  const normalized = normalizeDiscountType(discType);
+  if (normalized === "ntlAthlete") return "ntlAthlete";
+  if (normalized === "soloParent") return "soloParent";
+  return normalized || "";
+}
+
+function resolveDiscountType(item: any): string {
+  const explicit = normalizeDiscountType(item?.individualDiscountType || item?.transactionDiscountType || "");
+  if (explicit) return explicit;
+
+  const pax = item?.paxDiscount;
+  if (!pax || typeof pax !== 'object') return "";
+
+  if (pax.senior) return 'senior';
+  if (pax.pwd) return 'pwd';
+  if (pax.sp) return 'soloParent';
+  if (pax.ntl) return 'ntlAthlete';
+  if (pax.diplomat) return 'diplomat';
+  if (pax.regular) return 'regular';
+  return "";
+}
+
+function resolveDiscountRate(item: any, discountType: string): number {
+  const pax = item?.paxDiscount;
+  if (pax && typeof pax === 'object') {
+    if (discountType === 'senior' && pax.senior) return (parseFloat(pax.senior.percent) || 20) / 100;
+    if (discountType === 'pwd' && pax.pwd) return (parseFloat(pax.pwd.percent) || 20) / 100;
+    if (discountType === 'soloParent' && pax.sp) return (parseFloat(pax.sp.percent) || 10) / 100;
+    if (discountType === 'regular' && pax.regular) return (parseFloat(pax.regular.percent) || 0) / 100;
+  }
+
+  if (discountType === 'senior') return 0.2;
+  if (discountType === 'pwd') return 0.2;
+  if (discountType === 'soloParent') return 0.1;
+  return 0;
+}
 
 // Get current user from localStorage (since we're not in a React component)
 // This matches the storage pattern in AuthContext
@@ -23,6 +78,206 @@ function getCurrentUserUid(): string | null {
 // Helper to get user settings (placeholder implementation)
 function getUserSettings() {
   return exportUtils.getUserSettings();
+}
+
+// Get refund summary with proper Z-aligned calculations
+function getRefundSummary(snapshot: any): any[] {
+  const data: any[] = [];
+  
+  if (!snapshot || !snapshot.forEach) {
+    (data as any).beginningRefundSI = '';
+    (data as any).endingRefundSI = '';
+    return data;
+  }
+
+  const VAT_RATE = 0.12;
+  const NAAC_RATE = 0.20;
+
+  snapshot.forEach((snap: any) => {
+    const key = snap.key;
+    const value = snap.val();
+
+    if (value.trainingMode) return;
+
+    const matchKey = value.originalRefundKey != null
+      ? String(value.originalRefundKey)
+      : String(key);
+    const isRefundedItem = (item: any) =>
+      item != null && item.refund != null && String(item.refund) === matchKey;
+    const refundedItems = (value.items || []).filter(isRefundedItem);
+
+    let vatableSales = 0;
+    let vatAmount = 0;
+    let vatExemptSales = 0;
+    let zeroRatedSales = 0;
+
+    for (const item of refundedItems) {
+      const vatType = item._defaultVatType
+        ? item._defaultVatType
+        : item.zeroVAT
+        ? "vatExempt"
+        : "vatable";
+      const totalPrice = (item.price || 0) * Math.abs(item.quantity || 1);
+
+      // PAX discount: each guest's portion is independently classified
+      if (item.paxDiscount && typeof item.paxDiscount === 'object') {
+        const guestCount = Object.values(item.paxDiscount).reduce(
+          (a: number, e: any) => a + (parseInt(e?.guestCount, 10) || 0),
+          0,
+        );
+        if (guestCount > 0) {
+          const isCommodity = item.isCommodity === true;
+          const baseAmount = totalPrice / (1 + VAT_RATE);
+
+          for (const [paxDiscType, discObj] of Object.entries(item.paxDiscount)) {
+            const seatCount = parseInt((discObj as any)?.guestCount, 10) || 0;
+            if (seatCount <= 0) continue;
+            const guestRatio = seatCount / guestCount;
+            const proportionalBase = baseAmount * guestRatio;
+            const normalizedType = normalizeDiscountType(paxDiscType);
+
+            const discRate =
+              (parseFloat((discObj as any)?.percent) || 0) / 100 ||
+              (normalizedType === 'senior' || normalizedType === 'pwd'
+                ? 0.2
+                : normalizedType === 'soloParent'
+                ? 0.1
+                : normalizedType === 'ntlAthlete'
+                ? 0.2
+                : 0);
+
+            if (normalizedType === 'ntlAthlete') {
+              vatableSales += proportionalBase * (1 - NAAC_RATE);
+              vatAmount += proportionalBase * VAT_RATE;
+            } else if (['senior', 'pwd', 'soloParent', 'commodity'].includes(normalizedType)) {
+              if (isCommodity && (normalizedType === 'senior' || normalizedType === 'pwd')) {
+                const commodityRate = 0.05;
+                vatableSales += proportionalBase * (1 - commodityRate);
+                vatAmount += proportionalBase * (1 - commodityRate) * VAT_RATE;
+              } else {
+                vatExemptSales += proportionalBase * (1 - discRate);
+              }
+            } else if (normalizedType === 'diplomat') {
+              zeroRatedSales += proportionalBase;
+            } else if (normalizedType === 'regular') {
+              const proportionalGross = totalPrice * guestRatio;
+              const discounted = proportionalGross * (1 - discRate);
+              vatableSales += discounted / (1 + VAT_RATE);
+              const itemVat = discounted - discounted / (1 + VAT_RATE);
+              vatAmount += itemVat;
+            }
+          }
+          continue;
+        }
+      }
+
+      const discountType = resolveDiscountType(item);
+      if (discountType === "ntlAthlete") {
+        const naacBase = totalPrice / (1 + VAT_RATE);
+        const naacDiscountedBase = naacBase * (1 - NAAC_RATE);
+        vatableSales += naacDiscountedBase;
+        vatAmount += naacBase * VAT_RATE;
+      } else if (["senior", "pwd", "soloParent", "commodity"].includes(discountType)) {
+        const discountRate = resolveDiscountRate(item, discountType);
+        vatExemptSales += (totalPrice / VAT_RATE) * (1 - discountRate);
+      } else if (discountType === "diplomat") {
+        const diplomataBase = totalPrice / (1 + VAT_RATE);
+        zeroRatedSales += diplomataBase;
+      } else if (discountType === "regular" && (vatType === "vatable" || !vatType)) {
+        const paxRate = resolveDiscountRate(item, discountType);
+        const rawDiscount = item.discount || item.discountSubtotal || 0;
+        const effectiveRate = paxRate > 0 ? paxRate : rawDiscount / 100;
+        const discountedPrice = totalPrice * (1 - effectiveRate);
+        vatableSales += discountedPrice / (1 + VAT_RATE);
+        const itemVat = discountedPrice - discountedPrice / (1 + VAT_RATE);
+        vatAmount += itemVat;
+      } else if (vatType === "vatable") {
+        vatableSales += totalPrice / VAT_RATE;
+        const itemVat = totalPrice - totalPrice / VAT_RATE;
+        vatAmount += itemVat;
+      } else if (vatType === "vatExempt") {
+        vatExemptSales += totalPrice;
+      } else if (vatType === "zeroVat") {
+        zeroRatedSales += totalPrice / VAT_RATE;
+      }
+    }
+
+    const totalRefundAmount = vatableSales + vatExemptSales + zeroRatedSales;
+
+    data.push({
+      refundKey: key,
+      vatableSales,
+      vatAmount,
+      vatExemptSales,
+      zeroRatedSales,
+      totalRefundAmount,
+    });
+  });
+
+  return data;
+}
+
+// Get PAX discount summary from refunded items
+function getPaxDiscountSummary(items: any[] = []): { amount: number; types: string[] } {
+  let amount = 0;
+  const types = new Set<string>();
+  const vatRate = 0.12;
+
+  for (const item of items) {
+    let usedParts = false;
+
+    if (item?._parts?.values) {
+      for (const [, part] of Object.entries(item._parts.values)) {
+        const discType = mapPaxDiscType((part as any)?.discType);
+        if (discType) types.add(discType);
+
+        if ((part as any)?.discType === 'diplomat') {
+          amount += Math.abs(Number((part as any)?.vatExemption) || 0);
+        } else {
+          amount += Math.abs(Number((part as any)?.discount) || 0);
+        }
+      }
+      usedParts = true;
+    }
+
+    if (!usedParts && item?.paxDiscount && typeof item.paxDiscount === 'object') {
+      const paxEntries = Object.entries(item.paxDiscount);
+      const totalGuests = paxEntries.reduce(
+        (sum, [, v]) => sum + (parseInt((v as any)?.guestCount, 10) || 0),
+        0,
+      );
+      const totalPrice = Math.abs(Number(item?.price || 0) * Number(item?.quantity || 0));
+      const baseAmount = totalPrice / (1 + vatRate);
+
+      for (const [k, v] of paxEntries) {
+        const guestCount = parseInt((v as any)?.guestCount, 10) || 0;
+        if (guestCount <= 0) continue;
+        const discType = mapPaxDiscType(k);
+        if (discType) types.add(discType);
+
+        const ratio = totalGuests > 0 ? guestCount / totalGuests : 0;
+        const proportionalBase = baseAmount * ratio;
+        const parsedRate = (parseFloat((v as any)?.percent) || 0) / 100;
+        const defaultRate =
+          discType === 'senior' || discType === 'pwd'
+            ? 0.2
+            : discType === 'soloParent'
+            ? 0.1
+            : discType === 'ntlAthlete'
+            ? 0.2
+            : 0;
+        const rate = parsedRate || defaultRate;
+
+        if (discType === 'diplomat') {
+          amount += proportionalBase * vatRate;
+        } else {
+          amount += proportionalBase * rate;
+        }
+      }
+    }
+  }
+
+  return { amount, types: Array.from(types) };
 }
 
 // X Reading functions
@@ -299,7 +554,141 @@ export async function saveRefunds(
         .format("X"),
     );
 
-    const refundsData = exportUtils.generateRefundsCsv(sttS, endS);
+    const userUid = getCurrentUserUid();
+    if (!userUid) {
+      throw new Error("User not authenticated");
+    }
+
+    const refundsRef = ref(database, `${userUid}/refunds`);
+    const refundsQuery = query(
+      refundsRef,
+      orderByKey(),
+      startAt(`${sttS}`),
+      endAt(`${endS}`),
+    );
+    const snapshot = await get(refundsQuery);
+
+    const headers = [
+      "Refund No",
+      "SI No",
+      "Date",
+      "Time",
+      "Cashier",
+      "Refunded Amount",
+      "Z Less Refund (Sales Adj)",
+      "Z VAT on Refund (VAT Adj)",
+      "Z Service Charge",
+      "Z Total Refund Effect",
+      "Discount Type",
+      "Discount Amount",
+      "Items",
+      "Item Discount Types",
+      "Names",
+      "IDs",
+      "TINs",
+    ];
+
+    const refundsData: string[][] = [headers];
+    
+    // Get Z-aligned refund summary for consistent calculations
+    const zRefundSummary = getRefundSummary(snapshot);
+    const zRefundByKey = new Map(
+      (zRefundSummary || []).map(r => [String(r.refundKey), r]),
+    );
+
+    if (snapshot.exists()) {
+      snapshot.forEach((childSnapshot) => {
+        const refund: any = childSnapshot.val() || {};
+        const refundKey = String(childSnapshot.key);
+        const matchKey =
+          refund.originalRefundKey != null
+            ? String(refund.originalRefundKey)
+            : refundKey;
+        const timestamp = parseInt(refundKey, 10);
+
+        const refundedItems = (refund.items || []).filter(
+          (item: any) => item?.refund != null && String(item.refund) === matchKey,
+        );
+
+        const refundAmount = refundedItems.reduce((sum: number, item: any, i: number) => {
+          const $itm = new TransactionItem({ val: item, key: i } as any);
+          return sum + Math.abs(($itm as any).__itmTotal) / MP;
+        }, 0);
+
+        // Use Z-aligned calculations
+        const zAligned = zRefundByKey.get(refundKey);
+        const salesAdjustmentRefund = Math.abs(
+          Number(zAligned?.totalRefundAmount ?? refundAmount) || 0,
+        );
+        const vatOnRefundAdjustment = Math.abs(Number(zAligned?.vatAmount) || 0);
+        
+        // Calculate service charge from refunded items
+        const $txnRefund = refundedItems.length
+          ? new Transaction({ val: { ...refund, items: refundedItems }, key: refundKey })
+          : ({ $service: 0 } as any);
+        const serviceChargeRefund = Math.abs(Number(($txnRefund as any).$service) || 0) / MP;
+        
+        const refundedAmountForReport = salesAdjustmentRefund;
+        const zRefundImpact =
+          refundedAmountForReport + vatOnRefundAdjustment + serviceChargeRefund;
+
+        // Get discount amount using improved PAX discount extraction
+        const { amount: discountAmountMP } = getPaxDiscountSummary(refundedItems);
+        const discountAmount = discountAmountMP > 0 ? (discountAmountMP / MP).toFixed(2) : "";
+
+        const itemDiscountTypes = [
+          ...new Set(
+            refundedItems.flatMap((item: any) => {
+              const types: string[] = [];
+              const explicit = normalizeDiscountType(
+                item?.individualDiscountType || item?.transactionDiscountType || ""
+              );
+              if (explicit) types.push(explicit);
+              if (item?.paxDiscount && typeof item.paxDiscount === "object") {
+                for (const k of Object.keys(item.paxDiscount)) {
+                  const mapped = mapPaxDiscType(k);
+                  if (mapped) types.push(mapped);
+                }
+              }
+              return types.filter(Boolean);
+            }),
+          ),
+        ].join("; ");
+
+        const effectiveDiscountType =
+          refund.transactionDiscountType || itemDiscountTypes;
+
+        const itemsList = refundedItems
+          .map((item: any) => `${item.title || ""} x${Math.abs(item.quantity || 1)}`)
+          .join("; ");
+
+        const metadata = refund.seniorAndPwdMetadata || {};
+        const siFormatted = refund.receiptNo != null
+          ? `${String(refund.receiptCycle ?? 0).padStart(2, "0")}-${String(refund.receiptNo).padStart(6, "0")}`
+          : "";
+
+        refundsData.push([
+          String(refund.refundNo ?? ""),
+          siFormatted,
+          Moment.unix(timestamp).format("MM/DD/YYYY"),
+          Moment.unix(timestamp).format("hh:mm:ss A"),
+          String(refund.cashier || ""),
+          refundedAmountForReport.toFixed(2),
+          salesAdjustmentRefund.toFixed(2),
+          vatOnRefundAdjustment.toFixed(2),
+          serviceChargeRefund.toFixed(2),
+          zRefundImpact.toFixed(2),
+          String(effectiveDiscountType || ""),
+          discountAmount,
+          itemsList,
+          itemDiscountTypes,
+          String(metadata.names || ""),
+          String(metadata.ids || ""),
+          String(metadata.tins || ""),
+        ]);
+      });
+    }
+
     const timeRange = exportUtils.formatTimeRange(sttS, endS);
     const filename = `Refunds Report ${timeRange.start} to ${timeRange.end}`;
 

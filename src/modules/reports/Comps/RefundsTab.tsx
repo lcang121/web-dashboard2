@@ -6,7 +6,16 @@ import { ref, query, orderByKey, startAt, endAt, onValue, off } from 'firebase/d
 import { database } from '../../../config/firebase';
 import { useAuth } from '../../../contexts/AuthContext';
 import Transaction from '../../../models/Transaction';
+import TransactionItem from '../../../models/TransactionItem';
 import _ from 'lodash-es';
+
+const MP = Transaction.MONEY_PRECISION;
+
+const mapPaxDiscType = (discType?: string) => {
+  if (discType === 'ntl') return 'ntlAthlete';
+  if (discType === 'sp') return 'soloParent';
+  return discType || '';
+};
 
 export default function RefundsTab() {
   const { user } = useAuth();
@@ -97,6 +106,65 @@ export default function RefundsTab() {
     }
   };
 
+  const getRefundMetrics = (refund: Transaction) => {
+    const raw = refund.original || {};
+    const refundKey = String(refund.key);
+    const matchKey = raw.originalRefundKey != null ? String(raw.originalRefundKey) : refundKey;
+    const refundedItems = (raw.items || []).filter(
+      (item: any) => item?.refund != null && String(item.refund) === matchKey,
+    );
+
+    const $txnRefund = refundedItems.length
+      ? new Transaction({ key: refundKey, val: { ...raw, items: refundedItems } })
+      : ({ $vatableSales: 0, $vatExemptSales: 0, $zeroRatedSales: 0, $vat: 0, $service: 0 } as any);
+
+    const salesAdjustment = Math.abs(
+      ((Number(($txnRefund as any).$vatableSales) || 0) +
+        (Number(($txnRefund as any).$vatExemptSales) || 0) +
+        (Number(($txnRefund as any).$zeroRatedSales) || 0)) / MP,
+    );
+    const vatAdjustment = Math.abs(Number(($txnRefund as any).$vat) || 0) / MP;
+    const serviceCharge = Math.abs(Number(($txnRefund as any).$service) || 0) / MP;
+
+    const totalDiscountMP = refundedItems.reduce((sum: number, item: any, i: number) => {
+      const $itm = new TransactionItem({ val: item, key: i } as any);
+      const d = ($itm as any)._parts?.discount != null
+        ? Math.abs(Number(($itm as any)._parts.discount) || 0)
+        : Math.abs(Number(($itm as any).$discount) || 0);
+      return sum + d;
+    }, 0);
+
+    const itemDiscountTypes = [
+      ...new Set(
+        refundedItems.flatMap((item: any) => {
+          const types: string[] = [];
+          const explicit = item?.individualDiscountType || item?.transactionDiscountType || '';
+          if (explicit) types.push(explicit);
+          if (item?.paxDiscount && typeof item.paxDiscount === 'object') {
+            for (const k of Object.keys(item.paxDiscount)) {
+              const mapped = mapPaxDiscType(k);
+              if (mapped) types.push(mapped);
+            }
+          }
+          return types;
+        }),
+      ),
+    ].join('; ');
+
+    const discountType = raw.transactionDiscountType || itemDiscountTypes;
+    const discountAmount = totalDiscountMP > 0 ? totalDiscountMP / MP : 0;
+
+    return {
+      salesAdjustment,
+      vatAdjustment,
+      serviceCharge,
+      zTotalRefundEffect: salesAdjustment + vatAdjustment + serviceCharge,
+      discountType,
+      discountAmount,
+      refundedItemsCount: refundedItems.length,
+    };
+  };
+
   // Pagination calculations
   const totalPages = Math.ceil(refundsData.value.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
@@ -174,14 +242,18 @@ export default function RefundsTab() {
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Date</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Time</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-red-700 uppercase">Refund Amount</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-blue-700 uppercase">Original Amount</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase">Items</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Reference</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-red-700 uppercase">Z Less Refund</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-blue-700 uppercase">Z VAT Adj</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-emerald-700 uppercase">Z Service</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-violet-700 uppercase">Z Total Effect</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase">Discount Amt</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Discount Type</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {paginatedRefunds.map((refund, idx) => (
+                {paginatedRefunds.map((refund, idx) => {
+                  const m = getRefundMetrics(refund);
+                  return (
                   <tr key={`${refund.key}-${idx}`} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 text-sm text-gray-900">
                       {Moment.unix(Number(refund.key)).format('DD MMM YYYY')}
@@ -190,21 +262,27 @@ export default function RefundsTab() {
                       {Moment.unix(Number(refund.key)).format('h:mm a')}
                     </td>
                     <td className="px-6 py-4 text-sm text-red-600 font-medium text-right">
-                      {refund.getFormattedCurrency('$amountDue')}
+                      ₱{m.salesAdjustment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600 text-right">
-                      {refund.original.originalAmount ?
-                        `₱${Number(refund.original.originalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                      ₱{m.vatAdjustment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600 text-right">
+                      ₱{m.serviceCharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600 text-right">
+                      ₱{m.zTotalRefundEffect.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600 text-right">
+                      {m.discountAmount > 0
+                        ? `₱${m.discountAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                         : '—'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600 text-right">
-                      {refund.items?.length || 0}
-                    </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
-                      {refund.original.originalTransactionId || refund.original.reference || '—'}
+                      {m.discountType || '—'}
                     </td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
           </div>
