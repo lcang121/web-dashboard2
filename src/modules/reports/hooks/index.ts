@@ -1008,56 +1008,234 @@ export async function saveSpecialDiscounts(
       throw new Error("Start and end dates are required");
     }
 
-    const timeRange = exportUtils.formatTimeRange(
-      parseInt(Moment(stt, "YYMMDD").startOf("day").format("X")),
-      parseInt(Moment(end, "YYMMDD").endOf("day").format("X")),
-    );
+    const sttUnix = parseInt(Moment(stt, "YYMMDD").startOf("day").format("X"));
+    const endUnix = parseInt(Moment(end, "YYMMDD").endOf("day").format("X"));
+    const timeRange = exportUtils.formatTimeRange(sttUnix, endUnix);
 
-    // Placeholder implementation - would need actual discount data processing
+    const { user } = window as any; // Get current user from auth context
+    if (!user?.uid) throw new Error("User not authenticated");
+
+    // Fetch transactions from Firebase
+    const txnsRef = ref(database(), `${user.uid}/transactions`);
+    const txnsQuery = query(txnsRef, orderByKey(), startAt(String(sttUnix)), endAt(String(endUnix)));
+    const txnsSnapshot = await get(txnsQuery);
+
+    const transactions: Transaction[] = [];
+    if (txnsSnapshot.exists()) {
+      Object.entries(txnsSnapshot.val()).forEach(([key, val]: [string, any]) => {
+        const txn = new Transaction({ key: parseInt(key), val });
+        transactions.push(txn);
+      });
+    }
+
+    // Group data by discount type
+    const seniorData: Record<string, any[]> = {};
+    const pwdData: Record<string, any[]> = {};
+    const ntlAthleteData: Record<string, any[]> = {};
+    const soloParentData: Record<string, any[]> = {};
+    const diplomatData: Record<string, any[]> = {};
+
+    const vatRate = 0.12;
+
+    // Process transactions
+    transactions.forEach((txn) => {
+      const date = Moment.unix(Number(txn.key)).format('YYYY-MM-DD');
+
+      txn.items.forEach((item) => {
+        if (!item) return;
+
+        const vatType = item._defaultVatType || (item.zeroVAT ? 'vatExempt' : 'vatable');
+        const discountType = normalizeDiscountType(item.itmDiscType || item.txnDiscType);
+
+        // Calculate base and discount
+        const totalPrice = (item.price || 0) * Math.abs(item.quantity || 1);
+        const base = totalPrice / (1 + vatRate);
+        const discount = item.$discount || 0;
+        const netSales = TransactionItem.round(base - discount);
+
+        const rowData = {
+          date: Number(txn.key),
+          receiptNo: txn.original?.receiptNo || '',
+          receiptCycle: txn.original?.receiptCycle || 0,
+          id: '',
+          tin: '',
+          vatable: discountType !== 'diplomat' && vatType === 'vatable' ? base : 0,
+          vatExempt: vatType === 'vatExempt' ? base : 0,
+          vat: vatType === 'vatable' && discountType !== 'diplomat' ? base * vatRate : 0,
+          discount,
+          netSales,
+        };
+
+        // Route to appropriate sheet
+        if (discountType === 'senior') {
+          const name = item.name || 'Unknown';
+          if (!seniorData[name]) seniorData[name] = [];
+          seniorData[name].push(rowData);
+        } else if (discountType === 'pwd') {
+          const name = item.name || 'Unknown';
+          if (!pwdData[name]) pwdData[name] = [];
+          pwdData[name].push(rowData);
+        } else if (discountType === 'ntlAthlete') {
+          const name = item.name || 'Unknown';
+          if (!ntlAthleteData[name]) ntlAthleteData[name] = [];
+          ntlAthleteData[name].push(rowData);
+        } else if (discountType === 'soloParent') {
+          const name = item.name || 'Unknown';
+          if (!soloParentData[name]) soloParentData[name] = [];
+          soloParentData[name].push(rowData);
+        } else if (discountType === 'diplomat') {
+          const name = item.name || 'Unknown';
+          const grossSales = base + (base * vatRate);
+          if (!diplomatData[name]) diplomatData[name] = [];
+          diplomatData[name].push({
+            ...rowData,
+            netSales: grossSales, // For diplomat, net = gross (no VAT)
+          });
+        }
+      });
+    });
+
     const settings = getUserSettings();
     const workbookData: { [sheetName: string]: any[][] } = {};
+    const normalize = (val: any) => val;
+    const round = (n: number) => TransactionItem.round(n);
 
-    // Senior Citizen sheet
+    // SC Sheet (Sheet 2)
     workbookData["SeniorCitizen"] = [
-      ["Senior Citizen Sales Book/Report"],
-      ["", ""],
-      ["Report Period:", `${timeRange.start} to ${timeRange.end}`],
-      ["Business Name:", settings.name],
-      ["TIN:", settings.receiptDetails?.VATTIN || ""],
-      ["Address:", settings.address],
-      ["", ""],
       [
-        "Date",
-        "Receipt No.",
-        "Name",
-        "TIN/OSCA ID",
-        "Gross Amount",
-        "Discount",
-        "Net Amount",
+        'Date',
+        'Name of Senior Citizen',
+        'OSCA ID No.',
+        'SC TIN',
+        'SI/OR Number',
+        'Gross Sales',
+        'Discount (20%)',
+        'Net Sales',
       ],
-      // Data rows would go here
     ];
+    Object.entries(seniorData).forEach(([name, rows]) => {
+      rows.forEach((row) => {
+        const grossSales = (row.vatable || 0) + (row.vatExempt || 0);
+        workbookData["SeniorCitizen"].push([
+          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
+          normalize(name),
+          normalize(row.id),
+          normalize(row.tin?.length > 0 ? row.tin : 'N/A'),
+          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
+          normalize(round(grossSales) / MP),
+          normalize(round(row.discount) / MP),
+          normalize(round(row.netSales) / MP),
+        ]);
+      });
+    });
 
-    // PWD sheet
+    // PWD Sheet (Sheet 3)
     workbookData["PWD"] = [
-      ["Persons with Disability Sales Book/Report"],
-      ["", ""],
-      ["Report Period:", `${timeRange.start} to ${timeRange.end}`],
-      ["Business Name:", settings.name],
-      ["TIN:", settings.receiptDetails?.VATTIN || ""],
-      ["Address:", settings.address],
-      ["", ""],
       [
-        "Date",
-        "Receipt No.",
-        "Name",
-        "PWD ID",
-        "Gross Amount",
-        "Discount",
-        "Net Amount",
+        'Date',
+        'Name of Person with Disability',
+        'PWD ID No.',
+        'PWD TIN',
+        'SI/OR Number',
+        'Gross Sales',
+        'Discount (20%)',
+        'Net Sales',
       ],
-      // Data rows would go here
     ];
+    Object.entries(pwdData).forEach(([name, rows]) => {
+      rows.forEach((row) => {
+        const grossSales = (row.vatable || 0) + (row.vatExempt || 0);
+        workbookData["PWD"].push([
+          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
+          normalize(name),
+          normalize(row.id),
+          normalize(row.tin?.length > 0 ? row.tin : 'N/A'),
+          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
+          normalize(round(grossSales) / MP),
+          normalize(round(row.discount) / MP),
+          normalize(round(row.netSales) / MP),
+        ]);
+      });
+    });
+
+    // NAAC Sheet (Sheet 4)
+    workbookData["NAAC"] = [
+      [
+        'Date',
+        'Name of National Athlete/Coach',
+        'PNSTM ID No.',
+        'SI / OR Number',
+        'Gross Sales/Receipts',
+        'Sales Discount',
+        'Net Sales',
+      ],
+    ];
+    Object.entries(ntlAthleteData).forEach(([name, rows]) => {
+      rows.forEach((row) => {
+        workbookData["NAAC"].push([
+          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
+          normalize(name),
+          normalize(row.id),
+          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
+          normalize(round(row.vatable) / MP),
+          normalize(round(row.discount) / MP),
+          normalize(round(row.netSales) / MP),
+        ]);
+      });
+    });
+
+    // Solo Parent Sheet (Sheet 5)
+    workbookData["SoloParent"] = [
+      [
+        'Date',
+        'Name of Solo Parent',
+        'SPIC No.',
+        'SI / OR Number',
+        'Gross Sales',
+        'Discount (10%)',
+        'Net Sales',
+      ],
+    ];
+    Object.entries(soloParentData).forEach(([name, rows]) => {
+      rows.forEach((row) => {
+        const grossSales = (row.vatable || 0) + (row.vatExempt || 0);
+        workbookData["SoloParent"].push([
+          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
+          normalize(name),
+          normalize(row.id),
+          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
+          normalize(round(grossSales) / MP),
+          normalize(round(row.discount) / MP),
+          normalize(round(row.netSales) / MP),
+        ]);
+      });
+    });
+
+    // Diplomat Sheet (Sheet 6)
+    workbookData["Diplomat"] = [
+      [
+        'Date',
+        'Name of Diplomat',
+        'Diplomatic ID No.',
+        'TIN',
+        'SI/OR Number',
+        'Gross Sales (Zero-Rated)',
+        'Net Sales',
+      ],
+    ];
+    Object.entries(diplomatData).forEach(([name, rows]) => {
+      rows.forEach((row) => {
+        workbookData["Diplomat"].push([
+          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
+          normalize(name),
+          normalize(row.id),
+          normalize(row.tin?.length > 0 ? row.tin : 'N/A'),
+          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
+          normalize(round(row.netSales) / MP),
+          normalize(round(row.netSales) / MP),
+        ]);
+      });
+    });
 
     const filename = `Discount Report ${timeRange.start} to ${timeRange.end}`;
     const result = await exportUtils.downloadExcelFile(workbookData, filename, {
