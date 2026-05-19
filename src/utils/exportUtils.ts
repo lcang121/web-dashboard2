@@ -235,20 +235,77 @@ export async function generateXCsv(startDate: string, endDate?: string): Promise
 }
 
 // Web utility to get current user settings (placeholder)
-export function getUserSettings() {
-  // This would need to be implemented with actual user settings from context/store
-  return {
-    name: 'Business Name',
-    address: 'Business Address',
-    receiptDetails: {
-      VATTIN: '000-000-000-000',
-      NONVATTIN: '',
-      SN: 'SN123456',
-      MIN: 'MIN123456',
-      receiptType: 'OR'
-    },
-    account: 'user@example.com'
-  };
+export async function getUserSettings() {
+  const userUid = getCurrentUserUid();
+  if (!userUid) {
+    console.warn('User not authenticated');
+    return {
+      name: '',
+      address: '',
+      receiptDetails: {
+        VATTIN: '',
+        NONVATTIN: '',
+        SN: '',
+        MIN: '',
+        permitNo: '',
+        receiptType: 'OR'
+      }
+    };
+  }
+
+  try {
+    const settingsRef = ref(database, `${userUid}/settings`);
+    const snapshot = await get(settingsRef);
+    if (snapshot.exists()) {
+      const data = snapshot.val();
+      return {
+        name: data.name || '',
+        address: data.address || '',
+        businessStyle: data.businessStyle || '',
+        ownerName: data.ownerName || '',
+        receiptDetails: {
+          VATTIN: data.receiptDetails?.VATTIN || '',
+          NONVATTIN: data.receiptDetails?.NONVATTIN || '',
+          SN: data.receiptDetails?.SN || '',
+          MIN: data.receiptDetails?.MIN || '',
+          permitNo: data.receiptDetails?.permitNo || '',
+          receiptType: data.receiptDetails?.receiptType || 'OR'
+        },
+        BIRStartDate: data.BIRStartDate || '',
+        BIRresetNo: data.BIRresetNo || 0,
+        zReadNo: data.zReadNo || 1,
+        accumulatedSalesResetAt: data.accumulatedSalesResetAt || '0',
+        servicePercentage: data.servicePercentage || 0,
+        lastEndOfDay: data.lastEndOfDay || 0
+      };
+    }
+    return {
+      name: '',
+      address: '',
+      receiptDetails: {
+        VATTIN: '',
+        NONVATTIN: '',
+        SN: '',
+        MIN: '',
+        permitNo: '',
+        receiptType: 'OR'
+      }
+    };
+  } catch (error) {
+    console.error('Error fetching user settings:', error);
+    return {
+      name: '',
+      address: '',
+      receiptDetails: {
+        VATTIN: '',
+        NONVATTIN: '',
+        SN: '',
+        MIN: '',
+        permitNo: '',
+        receiptType: 'OR'
+      }
+    };
+  }
 }
 
 // Format time range for filenames

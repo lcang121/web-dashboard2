@@ -62,14 +62,16 @@ const MetricCard = ({
 
 export default function RevenueOverview({ data, isLoading = false }: RevenueOverviewProps) {
   const formatCurrency = (value: number) => {
-    return '₱' + value.toLocaleString(undefined, {
+    const safeValue = isNaN(value) || !isFinite(value) ? 0 : value;
+    return '₱' + safeValue.toLocaleString(undefined, {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
     });
   };
 
   const formatInteger = (value: number) => {
-    return value.toLocaleString();
+    const safeValue = isNaN(value) || !isFinite(value) ? 0 : value;
+    return safeValue.toLocaleString();
   };
 
   if (isLoading) {

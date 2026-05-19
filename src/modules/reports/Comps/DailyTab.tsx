@@ -37,7 +37,6 @@ import {
   generateDailySalesTrend,
   generatePaymentMethodData,
   generateSalesBreakdownData,
-  generateSampleData,
 } from "../../../components/charts";
 import Moment from "moment-timezone";
 
@@ -62,8 +61,7 @@ export default function DailyTab() {
   // Function to fetch transaction data for charts
   const fetchTransactionData = useCallback(async () => {
     if (!user?.uid) {
-      // Use sample data if no user is authenticated (for demo purposes)
-      setTransactions(generateSampleData());
+      setTransactions([]);
       return;
     }
 
@@ -93,16 +91,10 @@ export default function DailyTab() {
         });
       }
 
-      // If no real data is found, use sample data for demo
-      setTransactions(
-        fetchedTransactions.length > 0
-          ? fetchedTransactions
-          : generateSampleData(),
-      );
+      setTransactions(fetchedTransactions);
     } catch (error) {
       console.error("Error fetching transaction data:", error);
-      // Fall back to sample data on error
-      setTransactions(generateSampleData());
+      setTransactions([]);
     } finally {
       setChartsLoading(false);
     }
