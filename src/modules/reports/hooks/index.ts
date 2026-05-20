@@ -4,6 +4,9 @@ import Transaction from "../../../models/Transaction";
 import TransactionItem from "../../../models/TransactionItem";
 import exportUtils from "../../../utils/exportUtils";
 import Moment from "moment-timezone";
+import { getTransactionSummary } from "../../../utils/bir/transaction";
+import { getRefundSummary, getReturnSummary, getVoidSummary } from "../../../utils/bir/refund";
+import { calcReadingData } from "../../../utils/bir/calcReadingData";
 
 const MP = Transaction.MONEY_PRECISION;
 
@@ -445,6 +448,50 @@ export async function saveTransactions(
 }
 
 // Returns report (aligns with utakmobile - fetches from returns collection)
+// Helper to format receipt number
+function formatReceiptNoSimple(cycle: number, no: string | number): string {
+  if (no === '' || no === undefined || no === null) return '';
+  const cycleNum = Math.max(0, parseInt(String(cycle ?? 0), 10) || 0);
+  const noNum = Math.max(0, parseInt(String(no), 10) || 0);
+  const c = String(cycleNum).padStart(2, '0');
+  const n6 = String(noNum).padStart(6, '0');
+  return `${c}-${n6}`;
+}
+
+// Helper to extract customer metadata from PAX or seniorAndPwdMetadata
+function resolveCustomerMetadataForReturn(record: any, items: any[] = []): { names: string; ids: string; tins: string } {
+  const meta = record?.seniorAndPwdMetadata || {};
+  const normalized = {
+    names: String(meta?.names || '').trim(),
+    ids: String(meta?.ids || '').trim(),
+    tins: String(meta?.tins || '').trim(),
+  };
+
+  if (normalized.names || normalized.ids || normalized.tins) {
+    return normalized;
+  }
+
+  // Fallback: extract from PAX
+  const names = [];
+  const ids = [];
+  const tins = [];
+  for (const item of items || []) {
+    const pax = item?.paxDiscount;
+    if (!pax || typeof pax !== 'object') continue;
+    for (const entry of Object.values(pax) as any[]) {
+      if (entry?.names) names.push(...String(entry.names || '').split(/[\n,]+/).map((v: string) => v.trim()).filter(Boolean));
+      if (entry?.ids) ids.push(...String(entry.ids || '').split(/[\n,]+/).map((v: string) => v.trim()).filter(Boolean));
+      if (entry?.tins) tins.push(...String(entry.tins || '').split(/[\n,]+/).map((v: string) => v.trim()).filter(Boolean));
+    }
+  }
+
+  return {
+    names: [...new Set(names)].join('\n'),
+    ids: [...new Set(ids)].join('\n'),
+    tins: [...new Set(tins)].join('\n'),
+  };
+}
+
 export async function saveReturnsReport(
   sttS?: number,
   endS?: number,
@@ -465,55 +512,115 @@ export async function saveReturnsReport(
     const snapshot = await get(returnsQuery);
 
     const headers = [
-      "Return No",
-      "Original Receipt No",
-      "Date",
-      "Time",
-      "Cashier",
-      "Returned Amount",
-      "Items",
-      "Discount Type",
-      "Names",
-      "IDs",
-      "TINs",
+      'Return No',
+      'SI No',
+      'Date',
+      'Time',
+      'Cashier',
+      'Returned Amount',
+      'Z Less Return (Sales Adj)',
+      'Z VAT on Return (VAT Adj)',
+      'Z Service Charge',
+      'Z Total Return Effect',
+      'Discount Type',
+      'Discount Amount',
+      'Items',
+      'Item Discount Types',
+      'Names',
+      'IDs',
+      'TINs',
     ];
-    const data: string[][] = [headers];
+    const data: any[][] = [headers];
 
     if (snapshot.exists()) {
-      snapshot.forEach((childSnapshot) => {
-        const returnData = childSnapshot.val();
-        const key = childSnapshot.key;
-        const txn = new Transaction({ key, val: returnData });
-        const returnAmount = Math.abs(
-          (txn.$amountDue || txn.original?.total || 0) / Transaction.MONEY_PRECISION,
+      const zReturnSummary = getReturnSummary(snapshot);
+      const zReturnByKey = new Map(
+        (zReturnSummary?.returns || []).map((r: any) => [String(r.key), r]),
+      );
+
+      snapshot.forEach((returnSnapshot: any) => {
+        const returnData = returnSnapshot.val();
+        if (returnData?.trainingMode) return;
+        const returnKey = returnSnapshot.key;
+        const timestamp = parseInt(returnKey);
+
+        const isReturnedItem = (item: any) =>
+          item?.return != null && Number(item.return) === Number(returnKey);
+
+        const returnedItems = (returnData.items || []).filter(isReturnedItem);
+        const returnAmount = returnedItems.reduce((sum: number, item: any, i: number) => {
+          const $itm = new TransactionItem({ val: item, key: i });
+          return sum + Math.abs($itm.__itmTotal) / MP;
+        }, 0);
+        const zAligned = zReturnByKey.get(String(returnKey));
+        const salesAdjustmentReturn = Math.abs(
+          Number(
+            zAligned
+              ? (zAligned.vatableSales || 0) + (zAligned.vatExemptSales || 0) + (zAligned.zeroRatedSales || 0)
+              : returnAmount,
+          ) || 0,
         );
-        const timestamp = parseInt(String(key), 10);
+        const vatOnReturnAdjustment = Math.abs(Number(zAligned?.vatAmount) || 0);
+        const $txnReturn = returnedItems.length
+          ? Transaction.asAdjustment({ key: returnKey, val: { ...returnData, items: returnedItems } })
+          : { $service: 0 };
+        const serviceChargeReturn = Math.abs(Number($txnReturn.$service) || 0) / MP;
+        const returnedAmountForReport = Math.abs(
+          Number(zAligned?.returnAmount ?? returnAmount) || 0,
+        );
+        const zReturnImpact = salesAdjustmentReturn + vatOnReturnAdjustment + serviceChargeReturn;
 
-        const rawItems = Array.isArray(returnData?.items)
-          ? returnData.items
-          : Object.values(returnData?.items || {});
-        const itemsList = rawItems
-          .filter((item: any) => item?.returned)
-          .map(
-            (item: any) =>
-              `${item?.title || "Item"} x${Math.abs(item?.quantity || 1)}`,
-          )
-          .join("; ");
+        const totalDiscountMP = returnedItems.reduce((sum: number, item: any, i: number) => {
+          const $itm = new TransactionItem({ val: item, key: i });
+          const d = $itm._parts?.discount != null
+            ? Math.abs($itm._parts.discount)
+            : Math.abs($itm.$discount);
+          return sum + d;
+        }, 0);
+        const discountAmount = totalDiscountMP > 0 ? (totalDiscountMP / MP).toFixed(2) : '';
+        const itemsList = returnedItems
+          .map((item: any) => `${item.title || ''} x${Math.abs(item.quantity || 1)}`)
+          .join('; ');
 
-        const metadata = returnData?.seniorAndPwdMetadata || {};
+        const discountType = returnData.transactionDiscountType || '';
+        const itemDiscountTypes = [...new Set(
+          returnedItems.flatMap((item: any) => {
+            const types = [];
+            const explicit = item.individualDiscountType || item.transactionDiscountType || '';
+            if (explicit) types.push(explicit);
+            if (item.paxDiscount && typeof item.paxDiscount === 'object') {
+              for (const k of Object.keys(item.paxDiscount)) {
+                const mapped = normalizeDiscountType(k);
+                if (mapped) types.push(mapped);
+              }
+            }
+            return types.filter(Boolean);
+          }),
+        )].join('; ');
+        const effectiveDiscountType = discountType || itemDiscountTypes;
+
+        const metadata = resolveCustomerMetadataForReturn(returnData, returnedItems);
+        const siFormatted = returnData.receiptNo != null ? formatReceiptNoSimple(returnData.receiptCycle ?? 0, returnData.receiptNo) : '';
         const row = [
-          returnData?.returnNo || "",
-          returnData?.receiptNo || "",
-          Moment.unix(timestamp).format("MM/DD/YYYY"),
-          Moment.unix(timestamp).format("hh:mm:ss A"),
-          returnData?.cashier || "",
-          returnAmount.toFixed(2),
+          returnData.returnNo || '',
+          siFormatted,
+          Moment.unix(timestamp).format('MM/DD/YYYY'),
+          Moment.unix(timestamp).format('hh:mm:ss A'),
+          returnData.cashier || '',
+          returnedAmountForReport.toFixed(2),
+          salesAdjustmentReturn.toFixed(2),
+          vatOnReturnAdjustment.toFixed(2),
+          serviceChargeReturn.toFixed(2),
+          zReturnImpact.toFixed(2),
+          effectiveDiscountType,
+          discountAmount,
           itemsList,
-          returnData?.transactionDiscountType || "",
-          metadata?.names || "",
-          metadata?.ids || "",
-          metadata?.tins || "",
+          itemDiscountTypes,
+          metadata.names || '',
+          metadata.ids || '',
+          metadata.tins || '',
         ];
+
         data.push(row);
       });
     }
@@ -526,7 +633,148 @@ export async function saveReturnsReport(
     return result;
   } catch (error) {
     console.error("Error in saveReturnsReport:", error);
-    alert(`Error generating returns report: ${error.message}`);
+    alert(`Error generating returns report: ${(error as any).message}`);
+    return null;
+  }
+}
+
+// Voids report
+export async function saveVoidsReport(
+  sttS?: number,
+  endS?: number,
+  upload = false,
+) {
+  try {
+    const userUid = getCurrentUserUid();
+    if (!userUid) throw new Error("User not authenticated");
+    if (!sttS || !endS) throw new Error("Start and end timestamps required");
+
+    const voidsRef = ref(database, `${userUid}/voids`);
+    const voidsQuery = query(
+      voidsRef,
+      orderByKey(),
+      startAt(`${sttS}`),
+      endAt(`${endS}`),
+    );
+    const snapshot = await get(voidsQuery);
+
+    const headers = [
+      'Void No',
+      'SI No',
+      'Date',
+      'Time',
+      'Cashier',
+      'Voided Amount',
+      'Z Less Void (Sales Adj)',
+      'Z VAT on Void (VAT Adj)',
+      'Z Service Charge',
+      'Z Total Void Effect',
+      'Reason',
+      'Discount Type',
+      'Discount Amount',
+      'Items',
+      'Item Discount Types',
+      'Names',
+      'IDs',
+      'TINs',
+    ];
+    const data: any[][] = [headers];
+
+    if (snapshot.exists()) {
+      const zVoidSummary = getVoidSummary(snapshot);
+      const zVoidByKey = new Map(
+        (zVoidSummary?.voids || []).map((v: any) => [String(v.key), v]),
+      );
+
+      snapshot.forEach((voidSnapshot: any) => {
+        const voidData = voidSnapshot.val();
+        if (voidData?.trainingMode) return;
+        if (voidData?.isCancel === true) return;
+
+        const voidKey = voidSnapshot.key;
+        const timestamp = parseInt(voidKey);
+        const voidAmount = parseFloat(voidData.amount) || 0;
+        const zAligned = zVoidByKey.get(String(voidKey));
+        const salesAdjustmentVoid = Math.abs(Number(zAligned?.voidBase ?? 0) || 0);
+        const vatOnVoidAdjustment = Math.abs(Number(zAligned?.voidVat ?? 0) || 0);
+
+        const voidItems = voidData.items || [];
+        const $txnVoid = voidItems.length
+          ? Transaction.asAdjustment({ key: voidKey, val: { ...voidData, items: voidItems } })
+          : { $service: 0 };
+        const serviceChargeVoid = Math.abs(Number($txnVoid.$service) || 0) / MP;
+        const zVoidImpact = salesAdjustmentVoid + vatOnVoidAdjustment + serviceChargeVoid;
+
+        const totalDiscountMP = voidItems.reduce((sum: number, item: any, i: number) => {
+          if (!item) return sum;
+          const $itm = new TransactionItem({ val: item, key: i });
+          const d = $itm._parts?.discount != null
+            ? Math.abs($itm._parts.discount)
+            : Math.abs($itm.$discount);
+          return sum + d;
+        }, 0);
+        const discountAmount = totalDiscountMP > 0 ? (totalDiscountMP / MP).toFixed(2) : '';
+
+        const itemsList = voidItems
+          .map((item: any) => `${item.title || ''} x${Math.abs(item.quantity || 1)}`)
+          .join('; ');
+
+        const discountType = voidData.transactionDiscountType || '';
+        const itemDiscountTypes = [...new Set(
+          voidItems.flatMap((item: any) => {
+            const types = [];
+            const explicit = item?.individualDiscountType || item?.transactionDiscountType || '';
+            if (explicit) types.push(explicit);
+            if (item?.paxDiscount && typeof item.paxDiscount === 'object') {
+              for (const k of Object.keys(item.paxDiscount)) {
+                const mapped = normalizeDiscountType(k);
+                if (mapped) types.push(mapped);
+              }
+            }
+            return types.filter(Boolean);
+          }),
+        )].join('; ');
+        const effectiveDiscountType = discountType || itemDiscountTypes;
+
+        const metadata = resolveCustomerMetadataForReturn(voidData, voidItems);
+        const siFormatted = voidData.receiptNo != null
+          ? formatReceiptNoSimple(voidData.receiptCycle ?? 0, voidData.receiptNo)
+          : '';
+
+        const row = [
+          voidData.voidNo ?? '',
+          siFormatted,
+          Moment.unix(timestamp).format('MM/DD/YYYY'),
+          Moment.unix(timestamp).format('hh:mm:ss A'),
+          voidData.cashier || '',
+          voidAmount.toFixed(2),
+          salesAdjustmentVoid.toFixed(2),
+          vatOnVoidAdjustment.toFixed(2),
+          serviceChargeVoid.toFixed(2),
+          zVoidImpact.toFixed(2),
+          voidData.reason || '',
+          effectiveDiscountType,
+          discountAmount,
+          itemsList,
+          itemDiscountTypes,
+          metadata.names || '',
+          metadata.ids || '',
+          metadata.tins || '',
+        ];
+
+        data.push(row);
+      });
+    }
+
+    const timeRange = exportUtils.formatTimeRange(sttS, endS);
+    const filename = `Voids Report ${timeRange.start} to ${timeRange.end}`;
+    const result = await exportUtils.downloadCsvFile(data, filename, {
+      trainingMode: (globalThis as any).isInTrainingMode || false,
+    });
+    return result;
+  } catch (error) {
+    console.error("Error in saveVoidsReport:", error);
+    alert(`Error generating voids report: ${(error as any).message}`);
     return null;
   }
 }
@@ -843,30 +1091,28 @@ export async function saveSalesSummary(
     const sttS = parseInt(Moment(stt, "YYMMDD").startOf("day").format("X"));
     const endS = parseInt(Moment(end, "YYMMDD").endOf("day").format("X"));
 
-    // Query transactions for the date range
-    const transactionsRef = ref(database, `${userUid}/transactions`);
-    const transactionsQuery = query(
-      transactionsRef,
-      orderByKey(),
-      startAt(`${sttS}`),
-      endAt(`${endS - 1}`),
-    );
+    // Query all necessary data: transactions, refunds, returns, voids
+    const [transactionsSnapshot, refundsSnapshot, returnsSnapshot, voidsSnapshot, zCountersSnapshot] = await Promise.all([
+      get(query(ref(database, `${userUid}/transactions`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/refunds`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/returns`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/voids`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(ref(database, `${userUid}/zCounters`)),
+    ]);
 
-    const snapshot = await get(transactionsQuery);
-    const transactions: Transaction[] = [];
+    // Get transaction summary using BIR-compliant logic
+    const txnSummary = getTransactionSummary(transactionsSnapshot);
 
-    if (snapshot.exists()) {
-      snapshot.forEach((childSnapshot) => {
-        const txn = new Transaction({
-          key: childSnapshot.key,
-          val: childSnapshot.val(),
-        });
-        transactions.push(txn);
-      });
-    }
+    // Get refund, return, void summaries
+    const refundSummary = getRefundSummary(refundsSnapshot);
+    const returnSummary = getReturnSummary(returnsSnapshot);
+    const voidSummary = getVoidSummary(voidsSnapshot);
 
-    // Generate sales summary data
-    const settings = getUserSettings();
+    // Calculate all BIR totals using the core calculation engine
+    const readingData = calcReadingData(txnSummary, refundSummary as any, returnSummary, voidSummary);
+
+    // Get user settings
+    const settings = await exportUtils.getUserSettings();
     const timeRange = exportUtils.formatTimeRange(sttS, endS);
 
     // Build workbook data
@@ -888,96 +1134,89 @@ export async function saveSalesSummary(
       ["Software", "UTAKPOS v1.0.0"],
       ["Serial No", settings.receiptDetails?.SN || ""],
       ["MIN", settings.receiptDetails?.MIN || ""],
-      ["POS Terminal No", "1"],
+      ["POS Terminal No", settings.posTerminalNumber || "1"],
       ["Generated", Moment().format("MMMM D, YYYY h:mma")],
-      ["UserID", settings.account.split("@")[0]],
       ["Report Period", `${timeRange.start} to ${timeRange.end}`],
       ["", ""],
     ];
 
-    // BIR-compliant column headers (aligns with utakmobile mod_temp_bir/csvs/salesSummary.ts)
+    // BIR-compliant column headers (Annex E-1)
     const headerColumns = [
       "Date",
       `Beginning ${settings.receiptDetails?.receiptType || "OR"} No.`,
       `Ending ${settings.receiptDetails?.receiptType || "OR"} No.`,
-      "Grand Accum. Sales Balance",
-      "Grand Accum. Beg Balance",
       "Gross Sales for the Day",
       "VATable Sales",
       "VAT-Exempt Sales",
       "VAT Zero-Rated Sales",
       "VAT Amount",
-      "Discounts",
-      "Returns",
-      "Voids",
+      "Less Discount SC",
+      "Less Discount PWD",
+      "Less Discount NAAC",
+      "Less Discount Solo Parent",
+      "Less Discount Others",
+      "Less Returns",
+      "Less Voids",
+      "Less Refunds",
       "Total Deductions",
       "Adjustment on VAT: SC",
       "Adjustment on VAT: PWD",
+      "Adjustment on VAT: Solo Parent",
+      "Adjustment on VAT: Reg Txns",
+      "Adjustment on VAT: Zero Rated",
       "Adjustment on VAT: Others",
-      "VAT on Return",
+      "Adjustment on VAT: Returns",
+      "Adjustment on VAT: Void Vat",
+      "Adjustment on VAT: Refund Vat",
       "Total VAT Adjustment",
       "VAT Payable",
       "Net Sales",
-      "Sales Overrun/Overflow",
       "Reset Counter",
       "Z-Counter",
-      "Remarks",
     ];
 
-    // Sales summary calculation (simplified - full BIR logic in utakmobile)
-    const summaryRows = [];
-    let totalSales = 0;
-    let totalVAT = 0;
-    let totalVatableSales = 0;
-    let totalVatExempt = 0;
-    let totalZeroRated = 0;
-    let totalDiscount = 0;
-
-    transactions.forEach((txn) => {
-      totalSales += txn.getDisplayValue("$netSales");
-      totalVAT += txn.getDisplayValue("$vat");
-      totalVatableSales += txn.getDisplayValue("$vatableSales");
-      totalVatExempt += txn.getDisplayValue("$vatExemptSales");
-      totalZeroRated += txn.getDisplayValue("$zeroRatedSales");
-      totalDiscount += txn.getDisplayValue("$discount");
-    });
-
-    const firstReceipt = transactions[0]?.original?.receiptNo ?? "000001";
-    const lastReceipt = transactions[transactions.length - 1]?.original?.receiptNo ?? firstReceipt;
-
-    summaryRows.push([
+    // Build summary row with all BIR calculations
+    const summaryRow = [
       Moment.unix(sttS).format("MM/DD/YYYY"),
-      String(firstReceipt).padStart(6, "0"),
-      String(lastReceipt).padStart(6, "0"),
-      totalSales.toFixed(2),
-      0, // Grand Accum. Beg Balance
-      totalSales.toFixed(2),
-      totalVatableSales.toFixed(2),
-      totalVatExempt.toFixed(2),
-      totalZeroRated.toFixed(2),
-      totalVAT.toFixed(2),
-      totalDiscount.toFixed(2),
-      0, // Returns
-      0, // Voids
-      totalDiscount.toFixed(2), // Total Deductions
-      0, // Adjustment on VAT: SC
-      0, // Adjustment on VAT: PWD
-      0, // Adjustment on VAT: Others
-      0, // VAT on Return
-      0, // Total VAT Adjustment
-      totalVAT.toFixed(2),
-      (totalSales - totalVAT).toFixed(2),
-      "", // Sales Overrun/Overflow
-      (settings as any).BIRresetNo ?? "00",
-      (settings as any).zReadNo ?? 0,
-      "",
-    ]);
+      readingData.beginningCI,
+      readingData.endingCI,
+      readingData.grossSales,
+      readingData.vatableSales,
+      readingData.vatExemptSales,
+      readingData.zeroRatedSales,
+      readingData.vatAmount,
+      readingData.scDiscount,
+      readingData.pwdDiscount,
+      readingData.naacDiscount,
+      readingData.soloParentDiscount,
+      readingData.othersDiscount,
+      readingData.lessReturn,
+      readingData.lessVoid,
+      readingData.refundTotal,
+      (Number(readingData.scDiscount) + Number(readingData.pwdDiscount) + Number(readingData.naacDiscount) +
+       Number(readingData.soloParentDiscount) + Number(readingData.othersDiscount) +
+       Number(readingData.lessReturn) + Number(readingData.lessVoid) + Number(readingData.refundTotal)).toFixed(2),
+      readingData.scVatAdj,
+      readingData.pwdVatAdj,
+      readingData.soloParentVatAdj,
+      readingData.othersTrans, // Reg Txns VAT Adj
+      readingData.zeroRatedVatAdj,
+      0, // Others (for future use)
+      readingData.vatOnReturns,
+      0, // Void VAT (from voidSummary)
+      readingData.refundVatReturns,
+      readingData.lessVatAdjustment,
+      readingData.vatPayable || (Number(readingData.vatAmount) - Number(readingData.vatOnReturns) - Number(readingData.refundVatReturns)).toFixed(2),
+      readingData.netAmount,
+      settings.BIRresetNo ?? 0,
+      settings.zReadNo ?? 1,
+    ];
 
     workbookData["SalesSummary"] = [
       headerTitle,
       ...metaRows,
       headerColumns,
-      ...summaryRows,
+      summaryRow,
     ];
 
     const filename = `Sales Summary Report ${timeRange.start} to ${timeRange.end}`;
@@ -994,7 +1233,7 @@ export async function saveSalesSummary(
   }
 }
 
-// Special discounts Excel report
+// Special discounts Excel report - port from mobile specialDiscounts.ts
 export async function saveSpecialDiscounts(
   stt?: string,
   end?: string,
@@ -1011,153 +1250,444 @@ export async function saveSpecialDiscounts(
     const endUnix = parseInt(Moment(end, "YYMMDD").endOf("day").format("X"));
     const timeRange = exportUtils.formatTimeRange(sttUnix, endUnix);
 
-    const { user } = window as any; // Get current user from auth context
-    if (!user?.uid) throw new Error("User not authenticated");
+    const userUid = getCurrentUserUid();
+    if (!userUid) throw new Error("User not authenticated");
 
     // Fetch transactions from Firebase
-    const txnsRef = ref(database(), `${user.uid}/transactions`);
+    const txnsRef = ref(database, `${userUid}/transactions`);
     const txnsQuery = query(txnsRef, orderByKey(), startAt(String(sttUnix)), endAt(String(endUnix)));
     const txnsSnapshot = await get(txnsQuery);
 
-    const transactions: Transaction[] = [];
-    if (txnsSnapshot.exists()) {
-      Object.entries(txnsSnapshot.val()).forEach(([key, val]: [string, any]) => {
-        const txn = new Transaction({ key: parseInt(key), val });
-        transactions.push(txn);
-      });
-    }
-
-    // Group data by discount type
     const seniorData: Record<string, any[]> = {};
     const pwdData: Record<string, any[]> = {};
     const ntlAthleteData: Record<string, any[]> = {};
     const soloParentData: Record<string, any[]> = {};
     const diplomatData: Record<string, any[]> = {};
 
-    const vatRate = 0.12;
+    const VAT_RATE = 0.12;
 
-    // Process transactions
-    transactions.forEach((txn) => {
-      const date = Moment.unix(Number(txn.key)).format('YYYY-MM-DD');
+    // Process transactions snapshot per transaction
+    if (txnsSnapshot.exists()) {
+      txnsSnapshot.forEach((snap: any) => {
+        const key = snap.key;
+        const val = snap.val();
+        const $txn = new Transaction({ key, val });
 
-      txn.items.forEach((item) => {
-        if (!item) return;
+        const names = $txn.original?.seniorAndPwdMetadata?.names?.split(/\n+/) || [];
+        const ids = $txn.original?.seniorAndPwdMetadata?.ids?.split(/\n+/) || [];
+        const tins = $txn.original?.seniorAndPwdMetadata?.tins?.split(/\n+/) || [];
 
-        const vatType = item._defaultVatType || (item.zeroVAT ? 'vatExempt' : 'vatable');
-        const discountType = normalizeDiscountType(item.itmDiscType || item.txnDiscType);
+        // PAX discount: stored on first item, not on transaction root
+        const paxDiscount = (() => {
+          const items = $txn.original?.items;
+          if (!items) return null;
+          const arr = Array.isArray(items) ? items : Object.values(items);
+          const firstWithPax = arr.find((i: any) => i?.paxDiscount);
+          return firstWithPax?.paxDiscount ?? null;
+        })();
 
-        // Calculate base and discount
-        const totalPrice = (item.price || 0) * Math.abs(item.quantity || 1);
-        const base = totalPrice / (1 + vatRate);
-        const discount = item.$discount || 0;
-        const netSales = TransactionItem.round(base - discount);
+        // Calculate total service fee for transaction to allocate proportionally
+        let totalGrossAfterDisc = 0;
+        for (const $itm of $txn.items) {
+          if (!$itm) continue;
+          const qtyPrice = ($itm.quantity || 0) * ($itm.price || 0);
+          const lineGross = $itm.vatType === 'vatable' ? qtyPrice / (1 + VAT_RATE) : qtyPrice;
+          const discAmt = ($itm.itmDiscount || 0) + ($itm.txnDiscount || 0);
+          totalGrossAfterDisc += lineGross - discAmt;
+        }
+        const svcRate = ($txn.original?.service || $txn.svcRate || 0) / (typeof ($txn.original?.service) === 'number' && ($txn.original?.service) > 1 ? 100 : 1);
+        const totalServiceFee = totalGrossAfterDisc * svcRate;
 
-        const rowData = {
-          date: Number(txn.key),
-          receiptNo: txn.original?.receiptNo || '',
-          receiptCycle: txn.original?.receiptCycle || 0,
-          id: '',
-          tin: '',
-          vatable: discountType !== 'diplomat' && vatType === 'vatable' ? base : 0,
-          vatExempt: vatType === 'vatExempt' ? base : 0,
-          vat: vatType === 'vatable' && discountType !== 'diplomat' ? base * vatRate : 0,
-          discount,
-          netSales,
+        // Non-PAX aggregation per discount type
+        const nonPaxTypeAgg: Record<string, any> = {
+          senior: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
+          pwd: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
+          ntlAthlete: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
+          soloParent: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
+          diplomat: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
         };
 
-        // Route to appropriate sheet
-        if (discountType === 'senior') {
-          const name = item.name || 'Unknown';
-          if (!seniorData[name]) seniorData[name] = [];
-          seniorData[name].push(rowData);
-        } else if (discountType === 'pwd') {
-          const name = item.name || 'Unknown';
-          if (!pwdData[name]) pwdData[name] = [];
-          pwdData[name].push(rowData);
-        } else if (discountType === 'ntlAthlete') {
-          const name = item.name || 'Unknown';
-          if (!ntlAthleteData[name]) ntlAthleteData[name] = [];
-          ntlAthleteData[name].push(rowData);
-        } else if (discountType === 'soloParent') {
-          const name = item.name || 'Unknown';
-          if (!soloParentData[name]) soloParentData[name] = [];
-          soloParentData[name].push(rowData);
-        } else if (discountType === 'diplomat') {
-          const name = item.name || 'Unknown';
-          const grossSales = base + (base * vatRate);
-          if (!diplomatData[name]) diplomatData[name] = [];
-          diplomatData[name].push({
-            ...rowData,
-            netSales: grossSales, // For diplomat, net = gross (no VAT)
-          });
+        // Aggregate per discount type from items
+        for (const $itm of $txn.items) {
+          if (!$itm) continue;
+
+          const itmSpecial = $itm.itmDiscType && $itm.itmDiscType !== 'regular' ? $itm.itmDiscType : null;
+          const txnSpecial = $itm.txnDiscType && $itm.txnDiscType !== 'regular' ? $itm.txnDiscType : null;
+          const perItemTypeDiscount: Record<string, number> = {};
+
+          if (itmSpecial) {
+            perItemTypeDiscount[itmSpecial] = (perItemTypeDiscount[itmSpecial] || 0) + ($itm.itmDiscount || 0);
+          }
+          if (txnSpecial) {
+            perItemTypeDiscount[txnSpecial] = (perItemTypeDiscount[txnSpecial] || 0) + ($itm.txnDiscount || 0);
+          }
+
+          for (const [discType, discAmtRaw] of Object.entries(perItemTypeDiscount)) {
+            if (!nonPaxTypeAgg[discType]) continue;
+
+            const discAmt = discAmtRaw || 0;
+            const qtyPrice = ($itm.quantity || 0) * ($itm.price || 0);
+            const lineGross = $itm.vatType === 'vatable' ? qtyPrice / (1 + VAT_RATE) : qtyPrice;
+            const lineGrossAfterDisc = lineGross - discAmt;
+            const allocatedServiceFee = totalGrossAfterDisc > 0 ? (lineGrossAfterDisc / totalGrossAfterDisc) * totalServiceFee : 0;
+            const lineNet = lineGrossAfterDisc + allocatedServiceFee;
+
+            if (discType !== 'diplomat' && discAmt <= 0) continue;
+            if (discType === 'diplomat' && lineGross <= 0 && discAmt <= 0) continue;
+
+            const agg = nonPaxTypeAgg[discType];
+            agg.discount += discAmt;
+            agg.netSales += lineNet;
+            agg.grossSales += lineGross;
+            agg.grossAfterDisc += lineGrossAfterDisc;
+
+            if ($itm.vatType === 'vatExempt') {
+              agg.vatExempt += lineGross / (1 + VAT_RATE);
+            } else if ($itm.vatType === 'zeroVat' || discType === 'diplomat') {
+              const vatExcluded = $itm.vatExemption || ($itm.vatType === 'zeroVat' ? (lineGross / 1.12) * 0.12 : 0);
+              agg.vatExcluded += vatExcluded;
+            } else {
+              const vatable = (lineGross - discAmt) / 1.12;
+              agg.vatable += vatable;
+              agg.vat += vatable * 0.12;
+            }
+          }
+        }
+
+        if (paxDiscount) {
+          // PAX: use _parts from items
+          type PartAgg = { grossSales: number; discount: number; netSales: number; vatable: number; vat: number; vatExempt: number; vatExemption: number };
+          const typeAgg: Record<string, PartAgg> = {};
+
+          for (const $itm of $txn.items) {
+            if (!$itm?._parts?.values) continue;
+            for (const [partDiscType, part] of Object.entries($itm._parts.values) as [string, any][]) {
+              if (!['senior', 'pwd', 'ntl', 'sp', 'diplomat'].includes(partDiscType)) continue;
+              if (!typeAgg[partDiscType]) {
+                typeAgg[partDiscType] = { grossSales: 0, discount: 0, netSales: 0, vatable: 0, vat: 0, vatExempt: 0, vatExemption: 0 };
+              }
+              typeAgg[partDiscType].grossSales += part.grossSales || 0;
+              typeAgg[partDiscType].discount += part.discount || 0;
+              typeAgg[partDiscType].netSales += part.netSales || 0;
+              typeAgg[partDiscType].vatExemption += part.vatExemption || 0;
+              if (part.vatType === 'vatable') {
+                typeAgg[partDiscType].vatable += part.discType === 'ntl' ? (part.grossSales || 0) : (part.netSales || 0);
+                typeAgg[partDiscType].vat += part.vat || 0;
+              } else if (part.vatType === 'vatExempt') {
+                typeAgg[partDiscType].vatExempt += part.grossSales || 0;
+              }
+            }
+          }
+
+          for (const [discType, discObj] of Object.entries(paxDiscount)) {
+            const typedDiscObj = discObj as any;
+            if (!typedDiscObj.guestCount) continue;
+            if (discType !== 'diplomat' && !typedDiscObj.percent) continue;
+
+            const agg = typeAgg[discType];
+            if (!agg) continue;
+            if (discType === 'diplomat') {
+              if (agg.grossSales <= 0 && agg.netSales <= 0) continue;
+            } else if (agg.discount <= 0 && agg.grossSales <= 0) {
+              continue;
+            }
+
+            const blockNames = (typedDiscObj.names || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean);
+            const blockIds = (typedDiscObj.ids || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean);
+            const blockTins = (typedDiscObj.tins || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean);
+            const blockChildNames = discType === 'sp' ? (typedDiscObj.childNames || typedDiscObj.childName || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean) : [] as string[];
+            const blockChildBirthDates = discType === 'sp' ? (typedDiscObj.childBirthDates || typedDiscObj.childBirthDate || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean) : [] as string[];
+            const blockChildAges = discType === 'sp' ? (typedDiscObj.childAges || (typedDiscObj.childAge != null ? String(typedDiscObj.childAge) : '')).split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean) : [] as string[];
+            const guestCountForType = parseInt(typedDiscObj.guestCount, 10) || 1;
+            const n = discType === 'sp'
+              ? Math.max(blockNames.length, blockIds.length, blockTins.length, blockChildNames.length, guestCountForType) || 1
+              : Math.max(blockNames.length, blockIds.length, blockTins.length, guestCountForType) || 1;
+
+            const grossPerRow = agg.grossSales / n;
+            const discountPerRow = agg.discount / n;
+            const netPerRow = agg.netSales / n;
+            const vatablePerRow = agg.vatable / n;
+            const vatPerRow = agg.vat / n;
+            const vatExemptPerRow = agg.vatExempt / n;
+
+            const typeLabels: Record<string, string> = {
+              senior: 'Senior Citizen (No ID)',
+              pwd: 'PWD (No ID)',
+              ntl: 'NAAC (No ID)',
+              sp: 'Solo Parent (No ID)',
+              diplomat: 'Diplomat (No ID)',
+            };
+            const defaultLabel = typeLabels[discType] || 'Guest';
+
+            for (let i = 0; i < n; i++) {
+              const name = blockNames[i] || blockIds[i] || (n > 1 ? `${defaultLabel} ${i + 1}` : defaultLabel);
+
+              if (discType === 'senior') {
+                if (!seniorData[name]) seniorData[name] = [];
+                seniorData[name].push({
+                  id: blockIds[i] || '',
+                  tin: blockTins[i] || '',
+                  date: $txn.key,
+                  receiptCycle: $txn.original?.receiptCycle ?? 0,
+                  receiptNo: $txn.original?.receiptNo || '',
+                  vatable: vatablePerRow,
+                  vat: vatPerRow,
+                  vatExempt: vatExemptPerRow,
+                  discount: discountPerRow,
+                  netSales: netPerRow,
+                });
+              } else if (discType === 'pwd') {
+                if (!pwdData[name]) pwdData[name] = [];
+                pwdData[name].push({
+                  id: blockIds[i] || '',
+                  tin: blockTins[i] || '',
+                  date: $txn.key,
+                  receiptCycle: $txn.original?.receiptCycle ?? 0,
+                  receiptNo: $txn.original?.receiptNo || '',
+                  vatable: vatablePerRow,
+                  vat: vatPerRow,
+                  vatExempt: vatExemptPerRow,
+                  discount: discountPerRow,
+                  netSales: netPerRow,
+                });
+              } else if (discType === 'ntl') {
+                if (!ntlAthleteData[name]) ntlAthleteData[name] = [];
+                const naacNetSales = TransactionItem.round(grossPerRow - discountPerRow);
+                ntlAthleteData[name].push({
+                  id: blockIds[i] || '',
+                  date: $txn.key,
+                  receiptCycle: $txn.original?.receiptCycle ?? 0,
+                  receiptNo: $txn.original?.receiptNo || '',
+                  discount: discountPerRow,
+                  grossSales: grossPerRow,
+                  netSales: naacNetSales,
+                });
+              } else if (discType === 'sp') {
+                if (!soloParentData[name]) soloParentData[name] = [];
+                const soloMeta = $txn.original?.soloParentMetadata || $txn.original?.soloParentDetails;
+                const childName = blockChildNames[i] || typedDiscObj.childName || soloMeta?.childName || '';
+                const childBirthDate = blockChildBirthDates[i] || typedDiscObj.childBirthDate || soloMeta?.childBirthDate || '';
+                const childAge = blockChildAges[i] != null && blockChildAges[i] !== '' ? blockChildAges[i] : (typedDiscObj.childAge ?? soloMeta?.childAge ?? '');
+                const soloNetSales = TransactionItem.round(grossPerRow - discountPerRow);
+                soloParentData[name].push({
+                  id: blockIds[i] || '',
+                  date: $txn.key,
+                  receiptCycle: $txn.original?.receiptCycle ?? 0,
+                  receiptNo: $txn.original?.receiptNo || '',
+                  discount: discountPerRow,
+                  grossSales: grossPerRow,
+                  netSales: soloNetSales,
+                  childName,
+                  childBirthDate,
+                  childAge,
+                });
+              } else if (discType === 'diplomat') {
+                if (!diplomatData[name]) diplomatData[name] = [];
+                const vatExemptPerRow = (agg.vatExemption || 0) / n;
+                diplomatData[name].push({
+                  id: blockIds[i] || '',
+                  tin: blockTins[i] || '',
+                  date: $txn.key,
+                  receiptCycle: $txn.original?.receiptCycle ?? 0,
+                  receiptNo: $txn.original?.receiptNo || '',
+                  grossSales: grossPerRow,
+                  vatExcluded: vatExemptPerRow,
+                  netSales: netPerRow,
+                });
+              }
+            }
+          }
+        } else {
+          // Non-PAX: use seniorAndPwdMetadata names for discounts
+          for (let n = 0; n < names.length; n++) {
+            const name = names[n];
+            if (!name) continue;
+
+            // Senior discount
+            const agg_senior = nonPaxTypeAgg.senior;
+            if (agg_senior.discount > 0) {
+              if (!seniorData[name]) seniorData[name] = [];
+              seniorData[name].push({
+                id: ids[n] || '',
+                tin: tins[n] || '',
+                date: $txn.key,
+                receiptCycle: $txn.original?.receiptCycle ?? 0,
+                receiptNo: $txn.original?.receiptNo || '',
+                vatable: agg_senior.vatable,
+                vat: agg_senior.vat,
+                vatExempt: agg_senior.vatExempt,
+                discount: agg_senior.discount,
+                netSales: agg_senior.netSales,
+              });
+            }
+
+            // PWD discount
+            const agg_pwd = nonPaxTypeAgg.pwd;
+            if (agg_pwd.discount > 0) {
+              if (!pwdData[name]) pwdData[name] = [];
+              pwdData[name].push({
+                id: ids[n] || '',
+                tin: tins[n] || '',
+                date: $txn.key,
+                receiptCycle: $txn.original?.receiptCycle ?? 0,
+                receiptNo: $txn.original?.receiptNo || '',
+                vatable: agg_pwd.vatable,
+                vat: agg_pwd.vat,
+                vatExempt: agg_pwd.vatExempt,
+                discount: agg_pwd.discount,
+                netSales: agg_pwd.netSales,
+              });
+            }
+
+            // NAAC discount
+            const agg_ntl = nonPaxTypeAgg.ntlAthlete;
+            if (agg_ntl.discount > 0) {
+              if (!ntlAthleteData[name]) ntlAthleteData[name] = [];
+              const ntlGross = agg_ntl.grossSales || 0;
+              ntlAthleteData[name].push({
+                id: ids[n] || '',
+                date: $txn.key,
+                receiptCycle: $txn.original?.receiptCycle ?? 0,
+                receiptNo: $txn.original?.receiptNo || '',
+                discount: agg_ntl.discount,
+                grossSales: ntlGross,
+                netSales: agg_ntl.netSales,
+              });
+            }
+
+            // Solo Parent discount
+            const agg_solo = nonPaxTypeAgg.soloParent;
+            if (agg_solo.discount > 0) {
+              if (!soloParentData[name]) soloParentData[name] = [];
+              const soloMeta = $txn.original?.soloParentMetadata || $txn.original?.soloParentDetails;
+              soloParentData[name].push({
+                id: ids[n] || '',
+                date: $txn.key,
+                receiptCycle: $txn.original?.receiptCycle ?? 0,
+                receiptNo: $txn.original?.receiptNo || '',
+                discount: agg_solo.discount,
+                grossSales: agg_solo.grossSales,
+                netSales: agg_solo.netSales,
+                childName: soloMeta?.childName || '',
+                childBirthDate: soloMeta?.childBirthDate || '',
+                childAge: soloMeta?.childAge ?? '',
+              });
+            }
+
+            // Diplomat discount
+            const agg_diplomat = nonPaxTypeAgg.diplomat;
+            if (agg_diplomat.grossSales > 0 || agg_diplomat.vatExcluded > 0) {
+              if (!diplomatData[name]) diplomatData[name] = [];
+              diplomatData[name].push({
+                id: ids[n] || '',
+                tin: tins[n] || '',
+                date: $txn.key,
+                receiptCycle: $txn.original?.receiptCycle ?? 0,
+                receiptNo: $txn.original?.receiptNo || '',
+                grossSales: agg_diplomat.grossSales,
+                vatExcluded: agg_diplomat.vatExcluded || 0,
+                netSales: agg_diplomat.netSales,
+              });
+            }
+          }
         }
       });
-    });
+    }
 
-    const settings = getUserSettings();
     const workbookData: { [sheetName: string]: any[][] } = {};
-    const normalize = (val: any) => val;
+    const normalize = (val: any) => {
+      if (typeof val === 'string') {
+        return val.replace(/[,;:\t]/g, '');
+      } else if (typeof val === 'number' && !isNaN(val)) {
+        return parseFloat(val.toFixed(2));
+      }
+      return 0;
+    };
     const round = (n: number) => TransactionItem.round(n);
+    const formatReceiptNo = (cycle: number, no: string | number): string => {
+      if (no === '' || no === undefined || no === null) return '';
+      const cycleNum = Math.max(0, parseInt(String(cycle ?? 0), 10) || 0);
+      const noNum = Math.max(0, parseInt(String(no), 10) || 0);
+      const c = String(cycleNum).padStart(2, '0');
+      const n6 = String(noNum).padStart(6, '0');
+      return `${c}-${n6}`;
+    };
 
-    // SC Sheet (Sheet 2)
+    // Senior Citizens sheet (Annex E-2)
     workbookData["SeniorCitizen"] = [
       [
         'Date',
-        'Name of Senior Citizen',
-        'OSCA ID No.',
+        'Name of Senior Citizen (SC)',
+        'OSCA ID No./SC ID No.',
         'SC TIN',
         'SI/OR Number',
-        'Gross Sales',
+        'Sales (inclusive of VAT)',
+        'VAT Amount',
+        'VAT Exempt Sales',
+        'Discount (5%)',
         'Discount (20%)',
         'Net Sales',
       ],
     ];
     Object.entries(seniorData).forEach(([name, rows]) => {
       rows.forEach((row) => {
-        const grossSales = (row.vatable || 0) + (row.vatExempt || 0);
+        const vatExempt = row.vatExempt || 0;
+        const salesInclVat = vatExempt * (1 + VAT_RATE);
+        const vatAmount = 0;
         workbookData["SeniorCitizen"].push([
           normalize(Moment(row.date, 'X').format('D MMM YYYY')),
           normalize(name),
           normalize(row.id),
           normalize(row.tin?.length > 0 ? row.tin : 'N/A'),
-          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
-          normalize(round(grossSales) / MP),
+          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
+          normalize(round(salesInclVat) / MP),
+          normalize(round(vatAmount) / MP),
+          normalize(round(vatExempt) / MP),
+          normalize(0),
           normalize(round(row.discount) / MP),
           normalize(round(row.netSales) / MP),
         ]);
       });
     });
 
-    // PWD Sheet (Sheet 3)
+    // PWD sheet (Annex E-3)
     workbookData["PWD"] = [
       [
         'Date',
-        'Name of Person with Disability',
+        'Name of Person with Disability (PWD)',
         'PWD ID No.',
         'PWD TIN',
         'SI/OR Number',
-        'Gross Sales',
+        'Sales (inclusive of VAT)',
+        'VAT Amount',
+        'VAT Exempt Sales',
+        'Discount (5%)',
         'Discount (20%)',
         'Net Sales',
       ],
     ];
     Object.entries(pwdData).forEach(([name, rows]) => {
       rows.forEach((row) => {
-        const grossSales = (row.vatable || 0) + (row.vatExempt || 0);
+        const vatExempt = row.vatExempt || 0;
+        const salesInclVat = vatExempt * (1 + VAT_RATE);
+        const vatAmount = 0;
         workbookData["PWD"].push([
           normalize(Moment(row.date, 'X').format('D MMM YYYY')),
           normalize(name),
           normalize(row.id),
           normalize(row.tin?.length > 0 ? row.tin : 'N/A'),
-          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
-          normalize(round(grossSales) / MP),
+          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
+          normalize(round(salesInclVat) / MP),
+          normalize(round(vatAmount) / MP),
+          normalize(round(vatExempt) / MP),
+          normalize(0),
           normalize(round(row.discount) / MP),
           normalize(round(row.netSales) / MP),
         ]);
       });
     });
 
-    // NAAC Sheet (Sheet 4)
+    // NAAC sheet (Annex E-4)
     workbookData["NAAC"] = [
       [
         'Date',
@@ -1171,46 +1701,57 @@ export async function saveSpecialDiscounts(
     ];
     Object.entries(ntlAthleteData).forEach(([name, rows]) => {
       rows.forEach((row) => {
+        const grossSales = row.grossSales || 0;
+        const netSales = row.netSales != null ? row.netSales : (grossSales - (row.discount || 0));
         workbookData["NAAC"].push([
           normalize(Moment(row.date, 'X').format('D MMM YYYY')),
           normalize(name),
           normalize(row.id),
-          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
-          normalize(round(row.vatable) / MP),
+          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
+          normalize(round(grossSales) / MP),
           normalize(round(row.discount) / MP),
-          normalize(round(row.netSales) / MP),
+          normalize(round(netSales) / MP),
         ]);
       });
     });
 
-    // Solo Parent Sheet (Sheet 5)
+    // Solo Parent sheet (Annex E-5)
     workbookData["SoloParent"] = [
       [
         'Date',
         'Name of Solo Parent',
         'SPIC No.',
+        'Name of child',
+        'Birth Date of child',
+        'Age of child',
         'SI / OR Number',
         'Gross Sales',
-        'Discount (10%)',
+        'Discount (5%)',
+        'Discount (20%)',
         'Net Sales',
       ],
     ];
     Object.entries(soloParentData).forEach(([name, rows]) => {
       rows.forEach((row) => {
-        const grossSales = (row.vatable || 0) + (row.vatExempt || 0);
+        const grossSales = row.grossSales || 0;
+        const netSales = row.netSales != null ? row.netSales : (grossSales - (row.discount || 0));
         workbookData["SoloParent"].push([
           normalize(Moment(row.date, 'X').format('D MMM YYYY')),
           normalize(name),
           normalize(row.id),
-          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
+          normalize(row.childName || ''),
+          normalize(row.childBirthDate ? Moment(row.childBirthDate).format('D MMM YYYY') : ''),
+          normalize(row.childAge?.toString() || ''),
+          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
           normalize(round(grossSales) / MP),
+          normalize(0),
           normalize(round(row.discount) / MP),
-          normalize(round(row.netSales) / MP),
+          normalize(round(netSales) / MP),
         ]);
       });
     });
 
-    // Diplomat Sheet (Sheet 6)
+    // Diplomat sheet (Annex E-6)
     workbookData["Diplomat"] = [
       [
         'Date',
@@ -1218,20 +1759,25 @@ export async function saveSpecialDiscounts(
         'Diplomatic ID No.',
         'TIN',
         'SI/OR Number',
-        'Gross Sales (Zero-Rated)',
-        'Net Sales',
+        'Gross Sales (VAT-inclusive)',
+        'VAT Excluded (Zero-Rated)',
+        'Net Sales (VAT-exclusive)',
       ],
     ];
     Object.entries(diplomatData).forEach(([name, rows]) => {
       rows.forEach((row) => {
+        const grossSales = row.grossSales || 0;
+        const vatExcluded = row.vatExcluded || 0;
+        const netSales = row.netSales != null ? row.netSales : (grossSales - vatExcluded);
         workbookData["Diplomat"].push([
           normalize(Moment(row.date, 'X').format('D MMM YYYY')),
           normalize(name),
-          normalize(row.id),
+          normalize(row.id || ''),
           normalize(row.tin?.length > 0 ? row.tin : 'N/A'),
-          normalize(`${String(row.receiptCycle).padStart(2, '0')}-${String(row.receiptNo).padStart(6, '0')}`),
-          normalize(round(row.netSales) / MP),
-          normalize(round(row.netSales) / MP),
+          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
+          normalize(round(grossSales) / MP),
+          normalize(round(vatExcluded) / MP),
+          normalize(round(netSales) / MP),
         ]);
       });
     });
@@ -1245,7 +1791,7 @@ export async function saveSpecialDiscounts(
     return result;
   } catch (error) {
     console.error("Error in saveSpecialDiscounts:", error);
-    alert(`Error generating discount report: ${error.message}`);
+    alert(`Error generating discount report: ${(error as any).message}`);
     return null;
   }
 }
