@@ -1203,10 +1203,10 @@ export async function saveSalesSummary(
       readingData.zeroRatedVatAdj,
       0, // Others (for future use)
       readingData.vatOnReturns,
-      0, // Void VAT (from voidSummary)
+      voidSummary?.totalVoidVat ? Number(voidSummary.totalVoidVat).toFixed(2) : 0, // Void VAT
       readingData.refundVatReturns,
       readingData.lessVatAdjustment,
-      readingData.vatPayable || (Number(readingData.vatAmount) - Number(readingData.vatOnReturns) - Number(readingData.refundVatReturns)).toFixed(2),
+      readingData.vatPayable || (Number(readingData.vatAmount) - Number(readingData.vatOnReturns) - Number(readingData.refundVatReturns) - (voidSummary?.totalVoidVat || 0)).toFixed(2),
       readingData.netAmount,
       settings.BIRresetNo ?? 0,
       settings.zReadNo ?? 1,
@@ -1468,7 +1468,9 @@ export async function saveSpecialDiscounts(
                 const childName = blockChildNames[i] || typedDiscObj.childName || soloMeta?.childName || '';
                 const childBirthDate = blockChildBirthDates[i] || typedDiscObj.childBirthDate || soloMeta?.childBirthDate || '';
                 const childAge = blockChildAges[i] != null && blockChildAges[i] !== '' ? blockChildAges[i] : (typedDiscObj.childAge ?? soloMeta?.childAge ?? '');
-                const soloNetSales = TransactionItem.round(grossPerRow - discountPerRow);
+                const soloBaseAfterDiscount = grossPerRow - discountPerRow;
+                const soloServiceFee = soloBaseAfterDiscount * svcRate;
+                const soloNetSales = TransactionItem.round(soloBaseAfterDiscount + soloServiceFee);
                 soloParentData[name].push({
                   id: blockIds[i] || '',
                   date: $txn.key,
