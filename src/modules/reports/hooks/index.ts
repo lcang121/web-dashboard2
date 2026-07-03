@@ -1798,6 +1798,98 @@ export async function saveSpecialDiscounts(
   }
 }
 
+/**
+ * Product Mix report: one row per product (title + option) with total quantity
+ * sold and gross sales over the range, sorted by sales (best-sellers first).
+ * Excludes reversed items (refunded/returned/voided) and adjustment clones.
+ * Ported from mobile saveProductMix (utakmobileBIR).
+ */
+export async function saveProductMix(
+  stt?: string,
+  end?: string,
+  upload = false,
+) {
+  try {
+    console.log("saveProductMix called", { stt, end, upload });
+
+    if (!stt || !end) {
+      throw new Error("Start and end dates are required");
+    }
+
+    const sttUnix = parseInt(Moment(stt, "YYMMDD").startOf("day").format("X"), 10);
+    const endUnix = parseInt(Moment(end, "YYMMDD").endOf("day").format("X"), 10);
+    const timeRange = exportUtils.formatTimeRange(sttUnix, endUnix);
+
+    const userUid = getCurrentUserUid();
+    if (!userUid) throw new Error("User not authenticated");
+
+    // Fetch transactions from Firebase
+    const txnsRef = ref(database, `${userUid}/transactions`);
+    const txnsQuery = query(txnsRef, orderByKey(), startAt(String(sttUnix)), endAt(String(endUnix)));
+    const txnsSnapshot = await get(txnsQuery);
+
+    const mix = new Map<string, { item: string; option: string; category: string; quantity: number; sales: number }>();
+    if (txnsSnapshot.exists()) {
+      txnsSnapshot.forEach((snap: any) => {
+        const txn = snap.val();
+        if (!txn || txn.trainingMode || !Array.isArray(txn.items)) return;
+        for (const item of txn.items) {
+          if (!item) continue;
+          const qty = Number(item.quantity) || 0;
+          if (qty <= 0) continue; // skip adjustment clones / non-sold rows
+          if (item.refunded || item.returned || item.voided || item.refund != null || item.return != null) continue;
+          const title = item.title || "(unnamed)";
+          const option = item.option || "";
+          const category = item.categoryOriginal || item.category || "";
+          const key = `${title}|${option}`;
+          const sales = qty * (Number(item.price) || 0);
+          const cur = mix.get(key) || { item: title, option, category, quantity: 0, sales: 0 };
+          cur.quantity += qty;
+          cur.sales += sales;
+          mix.set(key, cur);
+        }
+      });
+    }
+
+    const sorted = [...mix.values()].sort((a, b) => b.sales - a.sales);
+    const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+    const sheetRows: any[][] = [["Item", "Option", "Category", "Quantity Sold", "Gross Sales"]];
+    let totalQty = 0;
+    let totalSales = 0;
+    for (const r of sorted) {
+      sheetRows.push([r.item, r.option, r.category, r.quantity, round2(r.sales)]);
+      totalQty += r.quantity;
+      totalSales += r.sales;
+    }
+    sheetRows.push(["TOTAL", "", "", totalQty, round2(totalSales)]);
+
+    const settings = await exportUtils.getUserSettings();
+    const workbookData: { [sheetName: string]: any[][] } = {
+      "Product Mix": [
+        ["PRODUCT MIX"],
+        ["", ""],
+        ["Report Period", `${timeRange.start} to ${timeRange.end}`],
+        ["Business Name", settings?.name || ""],
+        ["Generated", Moment().format("MM/DD/YYYY h:mm a")],
+        ["", ""],
+        ...sheetRows,
+      ],
+    };
+
+    const filename = `Product Mix ${timeRange.start} to ${timeRange.end}`;
+    const result = await exportUtils.downloadExcelFile(workbookData, filename, {
+      trainingMode: (globalThis as any).isInTrainingMode || false,
+    });
+
+    console.log(`Product Mix generated and downloaded: ${result}`);
+    return result;
+  } catch (error) {
+    console.error("Error in saveProductMix:", error);
+    alert(`Error generating Product Mix: ${(error as any).message}`);
+    return null;
+  }
+}
+
 // View journal (read-only) - supports type: 'all' | 'z' | 'x' (aligns with utakmobile)
 export async function viewJournal(
   stt?: string,

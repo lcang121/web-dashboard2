@@ -4,6 +4,7 @@ import {
   saveJournal,
   saveSalesSummary,
   saveSpecialDiscounts,
+  saveProductMix,
   viewJournal,
   printX,
   printJournal,
@@ -110,6 +111,21 @@ export default function CustomTab() {
     try {
       setLoading(true);
       await saveSpecialDiscounts(
+        Moment(sttS).format("YYMMDD"),
+        Moment(endS).format("YYMMDD"),
+        upload,
+      );
+    } catch (e) {
+      alert("Error: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveProductMix = async (upload = false) => {
+    try {
+      setLoading(true);
+      await saveProductMix(
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
         upload,
@@ -253,6 +269,21 @@ export default function CustomTab() {
             icon={Download}
             label="Excel"
             onClick={() => handleSaveSpecialDiscounts(false)}
+            variant="success"
+          />
+        </div>
+      </div>
+
+      {/* Product Mix Section */}
+      <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">
+          Product Mix
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SectionButton
+            icon={Download}
+            label="Excel"
+            onClick={() => handleSaveProductMix(false)}
             variant="success"
           />
         </div>

@@ -6,6 +6,7 @@ import {
   saveJournal,
   saveSalesSummary,
   saveSpecialDiscounts,
+  saveProductMix,
   printExpenses,
   printZ,
   printX,
@@ -352,6 +353,21 @@ export default function DailyTab() {
     }
   };
 
+  const handleSaveProductMix = async (upload = false) => {
+    try {
+      setLoading(true);
+      await saveProductMix(
+        Moment(sttS).format("YYMMDD"),
+        Moment(endS).format("YYMMDD"),
+        upload,
+      );
+    } catch (e) {
+      alert("Error: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const SectionButton = ({
     icon: Icon,
     label,
@@ -671,6 +687,21 @@ export default function DailyTab() {
             icon={Download}
             label="XLSX"
             onClick={() => handleSaveSpecialDiscounts(false)}
+            variant="primary"
+          />
+        </div>
+      </div>
+
+      {/* Product Mix Section (aligns with utakmobile) */}
+      <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">
+          Product Mix
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SectionButton
+            icon={Download}
+            label="XLSX"
+            onClick={() => handleSaveProductMix(false)}
             variant="primary"
           />
         </div>
