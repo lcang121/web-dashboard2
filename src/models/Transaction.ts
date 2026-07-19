@@ -25,6 +25,32 @@ export interface TransactionValue {
 class Transaction {
   static readonly MONEY_PRECISION = TransactionItem.MONEY_PRECISION;
 
+  // Ports of the mobile Transaction.js static factories. Build a Transaction,
+  // then keep only the relevant items and reassign `items` so the sums recompute.
+  static asPristine({ val, key = null, ...opts }: { val: TransactionValue; key?: number | string | null; [k: string]: any }): Transaction {
+    const $txn = new Transaction({ val, key, ...opts });
+    const $itms: (TransactionItem | null)[] = [];
+    for (const $itm of $txn.items) {
+      if (!$itm || $itm.quantity <= 0) continue;
+      $itms.push($itm);
+    }
+    $txn.items = $itms;
+    return $txn;
+  }
+
+  static asAdjustment({ val, key = null, ...opts }: { val: TransactionValue; key?: number | string | null; [k: string]: any }): Transaction {
+    const $txn = new Transaction({ val, key, ...opts });
+    const $itms: (TransactionItem | null)[] = [];
+    const refundKey = (val as any).originalRefundKey != null ? String((val as any).originalRefundKey) : String(key);
+    for (const $itm of $txn.items) {
+      if ($itm && $itm.quantity <= 0 && String($itm.original.refund) === refundKey) {
+        $itms.push($itm);
+      }
+    }
+    $txn.items = $itms;
+    return $txn;
+  }
+
   key: number | string | null;
   original: Record<string, any>;
   paymentType: string;
