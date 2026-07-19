@@ -1,12 +1,13 @@
 import React, { useState } from "react";
 import {
-  saveX,
   saveJournal,
   saveSalesSummary,
+  saveDetailedSalesReport,
   saveSpecialDiscounts,
+  saveProductMix,
   viewJournal,
-  printX,
   printJournal,
+  generateCustomReading,
 } from "../hooks";
 import Moment from "moment-timezone";
 import { Download, Loader, Eye, Printer } from "lucide-react";
@@ -19,14 +20,15 @@ export default function CustomTab() {
   const [loading, setLoading] = useState(false);
   const [journalData, setJournalData] = useState<string | null>(null);
   const [showJournalModal, setShowJournalModal] = useState(false);
+  const [journalType, setJournalType] = useState<"all" | "z" | "x" | "orderslip" | "billout">("all");
 
-  const handleSaveX = async (upload = false) => {
+  const handleSaveCustomReading = async () => {
     try {
       setLoading(true);
-      await saveX(
+      await generateCustomReading(
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
-        upload,
+        true,
       );
     } catch (e) {
       alert("Error: " + e);
@@ -35,13 +37,16 @@ export default function CustomTab() {
     }
   };
 
-  const handlePrintX = async () => {
+  const handleViewCustomReading = async () => {
     try {
       setLoading(true);
-      await printX(
+      const text = await generateCustomReading(
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
+        false,
       );
+      setJournalData(text);
+      setShowJournalModal(true);
     } catch (e) {
       alert("Error: " + e);
     } finally {
@@ -55,6 +60,7 @@ export default function CustomTab() {
       const data = await viewJournal(
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
+        journalType,
       );
       setJournalData(data);
       setShowJournalModal(true);
@@ -72,6 +78,7 @@ export default function CustomTab() {
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
         upload,
+        journalType,
       );
     } catch (e) {
       alert("Error: " + e);
@@ -106,10 +113,40 @@ export default function CustomTab() {
     }
   };
 
+  const handleSaveDetailed = async (upload = false) => {
+    try {
+      setLoading(true);
+      await saveDetailedSalesReport(
+        Moment(sttS).format("YYMMDD"),
+        Moment(endS).format("YYMMDD"),
+        upload,
+      );
+    } catch (e) {
+      alert("Error: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSaveSpecialDiscounts = async (upload = false) => {
     try {
       setLoading(true);
       await saveSpecialDiscounts(
+        Moment(sttS).format("YYMMDD"),
+        Moment(endS).format("YYMMDD"),
+        upload,
+      );
+    } catch (e) {
+      alert("Error: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveProductMix = async (upload = false) => {
+    try {
+      setLoading(true);
+      await saveProductMix(
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
         upload,
@@ -182,21 +219,21 @@ export default function CustomTab() {
         </div>
       </div>
 
-      {/* X-Reading Section */}
+      {/* Custom Reading Section (Z-layout over the selected range) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-        <h3 className="text-lg font-semibold mb-4 text-gray-800">X-Reading</h3>
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">Custom Reading</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <SectionButton
-            icon={Printer}
-            label="Print"
-            onClick={handlePrintX}
-            variant="primary"
+            icon={Eye}
+            label="VIEW"
+            onClick={handleViewCustomReading}
+            variant="secondary"
           />
           <SectionButton
             icon={Download}
-            label="CSV"
-            onClick={() => handleSaveX(false)}
-            variant="secondary"
+            label="Download (TXT)"
+            onClick={handleSaveCustomReading}
+            variant="success"
           />
         </div>
       </div>
@@ -206,6 +243,27 @@ export default function CustomTab() {
         <h3 className="text-lg font-semibold mb-4 text-gray-800">
           BIR eJournal
         </h3>
+        <div className="mb-4 flex flex-wrap gap-2">
+          {([
+            ["all", "Transaction"],
+            ["z", "Z-READ"],
+            ["x", "X-READ"],
+            ["orderslip", "Order Slips"],
+            ["billout", "Bill Outs"],
+          ] as const).map(([val, label]) => (
+            <button
+              key={val}
+              onClick={() => setJournalType(val)}
+              className={`px-4 py-2 rounded font-medium transition-colors ${
+                journalType === val
+                  ? "bg-utak-darkseagreen text-white"
+                  : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <SectionButton
             icon={Eye}
@@ -243,6 +301,21 @@ export default function CustomTab() {
         </div>
       </div>
 
+      {/* Detailed Sales Summary Section */}
+      <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">
+          Detailed Sales Summary (Per-Transaction)
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SectionButton
+            icon={Download}
+            label="Excel"
+            onClick={() => handleSaveDetailed(false)}
+            variant="success"
+          />
+        </div>
+      </div>
+
       {/* Special Discounts Section */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4 text-gray-800">
@@ -253,6 +326,21 @@ export default function CustomTab() {
             icon={Download}
             label="Excel"
             onClick={() => handleSaveSpecialDiscounts(false)}
+            variant="success"
+          />
+        </div>
+      </div>
+
+      {/* Product Mix Section */}
+      <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">
+          Product Mix
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SectionButton
+            icon={Download}
+            label="Excel"
+            onClick={() => handleSaveProductMix(false)}
             variant="success"
           />
         </div>

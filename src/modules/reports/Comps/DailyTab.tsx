@@ -5,7 +5,9 @@ import {
   viewJournal,
   saveJournal,
   saveSalesSummary,
+  saveDetailedSalesReport,
   saveSpecialDiscounts,
+  saveProductMix,
   printExpenses,
   printZ,
   printX,
@@ -37,7 +39,6 @@ import {
   generateDailySalesTrend,
   generatePaymentMethodData,
   generateSalesBreakdownData,
-  generateSampleData,
 } from "../../../components/charts";
 import Moment from "moment-timezone";
 
@@ -48,7 +49,7 @@ export default function DailyTab() {
   const [loading, setLoading] = useState(false);
   const [isZReprint, setIsZReprint] = useState(false);
   const [xReadingMode, setXReadingMode] = useState<"regular" | "history">("regular");
-  const [journalType, setJournalType] = useState<"all" | "z" | "x">("all");
+  const [journalType, setJournalType] = useState<"all" | "z" | "x" | "orderslip" | "billout">("all");
   const [journalData, setJournalData] = useState<string | null>(null);
   const [showJournalModal, setShowJournalModal] = useState(false);
   const [zHistoryModal, setZHistoryModal] = useState<{ open: boolean; data: any[] }>({ open: false, data: [] });
@@ -62,8 +63,7 @@ export default function DailyTab() {
   // Function to fetch transaction data for charts
   const fetchTransactionData = useCallback(async () => {
     if (!user?.uid) {
-      // Use sample data if no user is authenticated (for demo purposes)
-      setTransactions(generateSampleData());
+      setTransactions([]);
       return;
     }
 
@@ -93,16 +93,10 @@ export default function DailyTab() {
         });
       }
 
-      // If no real data is found, use sample data for demo
-      setTransactions(
-        fetchedTransactions.length > 0
-          ? fetchedTransactions
-          : generateSampleData(),
-      );
+      setTransactions(fetchedTransactions);
     } catch (error) {
       console.error("Error fetching transaction data:", error);
-      // Fall back to sample data on error
-      setTransactions(generateSampleData());
+      setTransactions([]);
     } finally {
       setChartsLoading(false);
     }
@@ -349,6 +343,36 @@ export default function DailyTab() {
     try {
       setLoading(true);
       await saveSpecialDiscounts(
+        Moment(sttS).format("YYMMDD"),
+        Moment(endS).format("YYMMDD"),
+        upload,
+      );
+    } catch (e) {
+      alert("Error: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveProductMix = async (upload = false) => {
+    try {
+      setLoading(true);
+      await saveProductMix(
+        Moment(sttS).format("YYMMDD"),
+        Moment(endS).format("YYMMDD"),
+        upload,
+      );
+    } catch (e) {
+      alert("Error: " + e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveDetailed = async (upload = false) => {
+    try {
+      setLoading(true);
+      await saveDetailedSalesReport(
         Moment(sttS).format("YYMMDD"),
         Moment(endS).format("YYMMDD"),
         upload,
@@ -630,6 +654,26 @@ export default function DailyTab() {
           >
             X-READ
           </button>
+          <button
+            onClick={() => setJournalType("orderslip")}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              journalType === "orderslip"
+                ? "bg-utak-darkseagreen text-white"
+                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+            }`}
+          >
+            Order Slips
+          </button>
+          <button
+            onClick={() => setJournalType("billout")}
+            className={`px-4 py-2 rounded font-medium transition-colors ${
+              journalType === "billout"
+                ? "bg-utak-darkseagreen text-white"
+                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+            }`}
+          >
+            Bill Outs
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -669,6 +713,21 @@ export default function DailyTab() {
         </div>
       </div>
 
+      {/* Detailed Sales Summary Section (aligns with utakmobile) */}
+      <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">
+          Detailed Sales Summary (Per-Transaction)
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SectionButton
+            icon={Download}
+            label="XLSX"
+            onClick={() => handleSaveDetailed(false)}
+            variant="primary"
+          />
+        </div>
+      </div>
+
       {/* Special Discounts Section (aligns with utakmobile) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4 text-gray-800">
@@ -679,6 +738,21 @@ export default function DailyTab() {
             icon={Download}
             label="XLSX"
             onClick={() => handleSaveSpecialDiscounts(false)}
+            variant="primary"
+          />
+        </div>
+      </div>
+
+      {/* Product Mix Section (aligns with utakmobile) */}
+      <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">
+          Product Mix
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SectionButton
+            icon={Download}
+            label="XLSX"
+            onClick={() => handleSaveProductMix(false)}
             variant="primary"
           />
         </div>
