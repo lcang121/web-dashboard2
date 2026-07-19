@@ -242,11 +242,9 @@ export default function RefundsTab() {
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Date</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Time</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-red-700 uppercase">Z Less Refund</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-blue-700 uppercase">Z VAT Adj</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-emerald-700 uppercase">Z Service</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-violet-700 uppercase">Z Total Effect</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase">Discount Amt</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-orange-700 uppercase">Refunded Amount</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-green-700 uppercase">Original Total</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase">Refunded Items</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Discount Type</th>
                 </tr>
               </thead>
@@ -261,22 +259,14 @@ export default function RefundsTab() {
                     <td className="px-6 py-4 text-sm text-utak-darkseagreen font-medium">
                       {Moment.unix(Number(refund.key)).format('h:mm a')}
                     </td>
-                    <td className="px-6 py-4 text-sm text-red-600 font-medium text-right">
-                      ₱{m.salesAdjustment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-600 text-right">
-                      ₱{m.vatAdjustment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-600 text-right">
-                      ₱{m.serviceCharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-600 text-right">
+                    <td className="px-6 py-4 text-sm text-orange-600 font-medium text-right">
                       ₱{m.zTotalRefundEffect.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
+                    <td className="px-6 py-4 text-sm text-green-600 font-medium text-right">
+                      {refund.getFormattedCurrency('$amountDue')}
+                    </td>
                     <td className="px-6 py-4 text-sm text-gray-600 text-right">
-                      {m.discountAmount > 0
-                        ? `₱${m.discountAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                        : '—'}
+                      {m.refundedItemsCount} of {refund.items?.length || 0}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
                       {m.discountType || '—'}

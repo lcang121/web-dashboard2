@@ -47,8 +47,10 @@ export default function DailyTab() {
   const [sttS, setSttS] = useState(Moment().startOf("day").toDate());
   const [endS, setEndS] = useState(Moment().endOf("day").toDate());
   const [loading, setLoading] = useState(false);
-  const [isZReprint, setIsZReprint] = useState(false);
-  const [xReadingMode, setXReadingMode] = useState<"regular" | "history">("regular");
+  // Back office is reprint-only: generating a NEW X/Z reading advances counters
+  // and writes the journal, which is a POS-side action. Force reprint/history.
+  const [isZReprint] = useState(true);
+  const [xReadingMode] = useState<"regular" | "history">("history");
   const [journalType, setJournalType] = useState<"all" | "z" | "x" | "orderslip" | "billout">("all");
   const [journalData, setJournalData] = useState<string | null>(null);
   const [showJournalModal, setShowJournalModal] = useState(false);
@@ -499,30 +501,7 @@ export default function DailyTab() {
 
       {/* Z-Reading Section (aligns with utakmobile) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-        <h3 className="text-lg font-semibold mb-4 text-gray-800">Z-Reading</h3>
-
-        <div className="mb-4 flex gap-2">
-          <button
-            onClick={() => setIsZReprint(false)}
-            className={`px-4 py-2 rounded font-medium transition-colors ${
-              !isZReprint
-                ? "bg-utak-darkseagreen text-white"
-                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
-            }`}
-          >
-            Regular
-          </button>
-          <button
-            onClick={() => setIsZReprint(true)}
-            className={`px-4 py-2 rounded font-medium transition-colors ${
-              isZReprint
-                ? "bg-utak-darkseagreen text-white"
-                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
-            }`}
-          >
-            Reprint History
-          </button>
-        </div>
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">Z-Reading (Reprint History)</h3>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <SectionButton
@@ -542,30 +521,7 @@ export default function DailyTab() {
 
       {/* X-Reading Section (aligns with utakmobile - Regular vs Reprint History) */}
       <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-        <h3 className="text-lg font-semibold mb-4 text-gray-800">X-Reading</h3>
-
-        <div className="mb-4 flex gap-2">
-          <button
-            onClick={() => setXReadingMode("regular")}
-            className={`px-4 py-2 rounded font-medium transition-colors ${
-              xReadingMode === "regular"
-                ? "bg-utak-darkseagreen text-white"
-                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
-            }`}
-          >
-            Regular
-          </button>
-          <button
-            onClick={() => setXReadingMode("history")}
-            className={`px-4 py-2 rounded font-medium transition-colors ${
-              xReadingMode === "history"
-                ? "bg-utak-darkseagreen text-white"
-                : "bg-gray-200 text-gray-800 hover:bg-gray-300"
-            }`}
-          >
-            Reprint History
-          </button>
-        </div>
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">X-Reading (Reprint History)</h3>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <SectionButton
