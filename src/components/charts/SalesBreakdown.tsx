@@ -189,7 +189,7 @@ export default function SalesBreakdown({
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mt-6 pt-4 border-t border-gray-100">
         <div className="text-center p-3 bg-blue-50 rounded-lg">
           <p className="text-lg font-bold text-blue-700">
-            ₱{(totals.vatableSales / 1000).toFixed(0)}k
+            ₱{totals.vatableSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
           <p className="text-xs text-blue-600">VATable Sales</p>
           <p className="text-xs text-gray-500">
@@ -199,7 +199,7 @@ export default function SalesBreakdown({
 
         <div className="text-center p-3 bg-green-50 rounded-lg">
           <p className="text-lg font-bold text-green-700">
-            ₱{(totals.vatExemptSales / 1000).toFixed(0)}k
+            ₱{totals.vatExemptSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
           <p className="text-xs text-green-600">VAT-Exempt</p>
           <p className="text-xs text-gray-500">
@@ -209,7 +209,7 @@ export default function SalesBreakdown({
 
         <div className="text-center p-3 bg-yellow-50 rounded-lg">
           <p className="text-lg font-bold text-yellow-700">
-            ₱{(totals.zeroRatedSales / 1000).toFixed(0)}k
+            ₱{totals.zeroRatedSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
           <p className="text-xs text-yellow-600">Zero-Rated</p>
           <p className="text-xs text-gray-500">
@@ -220,7 +220,7 @@ export default function SalesBreakdown({
         {showDiscounts && (
           <div className="text-center p-3 bg-red-50 rounded-lg">
             <p className="text-lg font-bold text-red-700">
-              ₱{(totals.discounts / 1000).toFixed(0)}k
+              ₱{totals.discounts.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
             <p className="text-xs text-red-600">Discounts</p>
             <p className="text-xs text-gray-500">
@@ -232,7 +232,7 @@ export default function SalesBreakdown({
         {showServiceCharges && (
           <div className="text-center p-3 bg-purple-50 rounded-lg">
             <p className="text-lg font-bold text-purple-700">
-              ₱{(totals.serviceCharges / 1000).toFixed(0)}k
+              ₱{totals.serviceCharges.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
             <p className="text-xs text-purple-600">Service</p>
             <p className="text-xs text-gray-500">
