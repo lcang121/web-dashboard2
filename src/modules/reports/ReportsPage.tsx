@@ -9,6 +9,7 @@ import VoidsTab from './Comps/VoidsTab';
 import MonthlyTab from './Comps/MonthlyTab';
 import AuditTrailTab from './Comps/AuditTrailTab';
 import ManualTab from './Comps/ManualTransactions';
+import ProductMixTab from './Comps/ProductMixTab';
 
 export default function ReportsPage() {
   const navigate = useNavigate();
@@ -23,6 +24,7 @@ export default function ReportsPage() {
     { id: 'refunds', label: 'Refunds', path: 'refunds' },
     { id: 'returns', label: 'Returns', path: 'returns' },
     { id: 'voids', label: 'Voids', path: 'voids' },
+    { id: 'productmix', label: 'Product Mix', path: 'productmix' },
     { id: 'monthly', label: 'Monthly', path: 'monthly' },
     { id: 'audit', label: 'Audit Trail', path: 'audit' },
   ];
@@ -67,6 +69,7 @@ export default function ReportsPage() {
           <Route path="refunds" element={<RefundsTab />} />
           <Route path="returns" element={<ReturnsTab />} />
           <Route path="voids" element={<VoidsTab />} />
+          <Route path="productmix" element={<ProductMixTab />} />
           <Route path="monthly" element={<MonthlyTab />} />
           <Route path="audit" element={<AuditTrailTab />} />
           <Route index element={<DailyTab />} />
