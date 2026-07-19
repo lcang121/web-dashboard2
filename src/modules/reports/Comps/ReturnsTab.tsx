@@ -187,7 +187,6 @@ export default function ReturnsTab() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Time</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-orange-700 uppercase">Returned Amount</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-green-700 uppercase">Original Total</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-blue-700 uppercase">Service</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase">Returned Items</th>
                 </tr>
               </thead>
@@ -205,9 +204,6 @@ export default function ReturnsTab() {
                     </td>
                     <td className="px-6 py-4 text-sm text-green-600 font-medium text-right">
                       {returnTxn.getFormattedCurrency('$amountDue')}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-utak-darkseagreen font-medium text-right">
-                      {returnTxn.getFormattedCurrency('$service')}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600 text-right">
                       {getReturnedItemsCount(returnTxn)} of {returnTxn.items?.length || 0}
