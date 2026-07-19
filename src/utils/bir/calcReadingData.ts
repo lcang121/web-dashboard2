@@ -32,6 +32,7 @@ interface TxnSummary {
       pwd: number;
       naac: number;
       soloParent: number;
+      medalOfValor?: number;
       others: number;
     };
     returns: number;
@@ -43,6 +44,7 @@ interface TxnSummary {
       pwd: number;
       naac?: number;
       soloParent?: number;
+      medalOfValor?: number;
       others: number;
     };
     returns: number;
@@ -133,12 +135,14 @@ interface CalcReadingDataResult {
   pwdDiscount: string | number;
   naacDiscount: string | number;
   soloParentDiscount: string | number;
+  medalOfValorDiscount: string | number;
   othersDiscount: string | number;
   othersTrans: string | number;
   vatOnReturns: string | number;
   scVatAdj: string | number;
   pwdVatAdj: string | number;
   soloParentVatAdj: string | number;
+  medalOfValorVatAdj: string | number;
   zeroRatedVatAdj: string | number;
   refundTotal: string | number;
   refundNetAmount: string | number;
@@ -150,6 +154,7 @@ interface CalcReadingDataResult {
   nonCashPayments: Record<string, string | number>;
   totalReturnAmount: string | number;
   serviceCharge: string | number;
+  cashTendered: string | number;
   vatPayable?: string | number;
 }
 
@@ -230,16 +235,28 @@ export const calcReadingData = (
       i.deductions.discount.pwd +
       i.deductions.discount.naac +
       i.deductions.discount.soloParent +
+      ((i.deductions.discount as any).medalOfValor || 0) +
       i.deductions.discount.others,
   );
   const scDiscount = sumPrecise(originalTxns, (i) => i.deductions.discount.sc || 0);
   const pwdDiscount = sumPrecise(originalTxns, (i) => i.deductions.discount.pwd || 0);
+  const medalOfValorDiscount = sumPrecise(
+    originalTxns,
+    (i) => Number((i.deductions.discount as any).medalOfValor) || 0,
+  );
 
   const returnBaseAmount = returnSummary?.returnBaseAmount || 0;
   const lessReturn = Math.abs(returnBaseAmount);
 
   const lessVoidFromTxn = sumPrecise(safeTxnSummary, (i) => i.deductions.voids || 0);
-  const lessVoid = Math.abs(Number(voidSummary?.totalVoidBase ?? voidSummary?.totalVoids ?? lessVoidFromTxn) || 0);
+  // Prefer summing each void's base from voids[] (matches printed reading) before
+  // falling back to the summary totals.
+  const voidBaseComputed = Array.isArray((voidSummary as any)?.voids)
+    ? sumPrecise((voidSummary as any).voids, (v: any) => Number(v?.voidBase ?? 0) || 0)
+    : null;
+  const lessVoid = Math.abs(
+    Number(voidBaseComputed ?? voidSummary?.totalVoidBase ?? voidSummary?.totalVoids ?? lessVoidFromTxn) || 0,
+  );
   const naacDiscount = sumPrecise(originalTxns, (i) => i.deductions.discount.naac || 0);
   const soloParentDiscount = sumPrecise(originalTxns, (i) => i.deductions.discount.soloParent || 0);
   const othersDiscount = sumPrecise(originalTxns, (i) => i.deductions.discount.others || 0);
@@ -251,22 +268,36 @@ export const calcReadingData = (
     safeTxnSummary,
     (i: TxnSummary) => Number((i.adjustmentOnVat.discount as any).soloParent) || 0,
   );
+  const medalOfValorVatAdj = sumPrecise(
+    safeTxnSummary,
+    (i: TxnSummary) => Number((i.adjustmentOnVat.discount as any).medalOfValor) || 0,
+  );
 
   const zeroRatedReturnVatAdj = Number(returnSummary?.zeroRatedReturnVatAdj) || 0;
-  const voidVatAdj = Number(voidSummary?.totalVoidVat ?? 0) || 0;
+  // Prefer summing each void's VAT from voids[] before falling back to the total.
+  const voidVatAdj = Array.isArray((voidSummary as any)?.voids)
+    ? sumPrecise((voidSummary as any).voids, (v: any) => Number(v?.voidVat ?? 0) || 0)
+    : (Number(voidSummary?.totalVoidVat ?? 0) || 0);
   const refundVatReturns =
     (safeRefundSummary as RefundSummaryItem[]).reduce?.((s: number, r: any) => s + (r.vatAmount || 0), 0) || 0;
   const zeroRatedVatAdj = Number(zeroRatedSales) * VAT_RATE;
+  // Prefer the freshly-recomputed vatOnReturns from returnSummary (reflects correct
+  // PAX classification); fall back to the txn-summed value only when absent.
+  const vatOnReturnsComputed =
+    (returnSummary as any)?.vatOnReturns != null
+      ? Number((returnSummary as any).vatOnReturns)
+      : vatOnReturns;
   const lessVatAdjustment =
     scVatAdj +
     pwdVatAdj +
     soloParentVatAdj +
+    medalOfValorVatAdj +
     othersTrans +
     zeroRatedReturnVatAdj +
     zeroRatedVatAdj +
     voidVatAdj +
     refundVatReturns +
-    vatOnReturns;
+    vatOnReturnsComputed;
 
   const refundTotal = sumBy(safeRefundSummary as RefundSummaryItem[], (i) => i.vatableSales + i.vatExemptSales + i.zeroRatedSales) || 0;
   const refundNetAmount = sumBy(
@@ -402,9 +433,17 @@ export const calcReadingData = (
   const beginningReturn = first(safeReturnSummary)?.returnNo ?? 0;
   const endingReturn = last(safeReturnSummary)?.returnNo ?? 0;
 
+  // Cash tendered from original (non-reversed) transactions' Cash payments.
+  const cashTendered = sumPrecise(originalTxns, (i: any) => {
+    const totals = i.paymentTypeTotals;
+    if (!totals) return 0;
+    const arr = Array.isArray(totals) ? totals : [totals];
+    return arr.reduce((s: number, p: any) => s + (Number(p?.Cash) || 0), 0);
+  });
+
   // VAT Payable = vatAmount - (vatOnReturns + refundVatReturns + voidVatAdj)
   // Note: NOT subtracting discount VAT adjustments
-  const vatPayable = vatAmount - (vatOnReturns + refundVatReturns + voidVatAdj);
+  const vatPayable = vatAmount - (vatOnReturnsComputed + refundVatReturns + voidVatAdj);
 
   return {
     beginningCI: normalizeNumber(Number(beginningCI)),
@@ -430,12 +469,14 @@ export const calcReadingData = (
     pwdDiscount: normalizeNumber(pwdDiscount),
     naacDiscount: normalizeNumber(naacDiscount),
     soloParentDiscount: normalizeNumber(soloParentDiscount),
+    medalOfValorDiscount: normalizeNumber(medalOfValorDiscount),
     othersDiscount: normalizeNumber(othersDiscount),
     othersTrans: normalizeNumber(othersTrans),
-    vatOnReturns: normalizeNumber(vatOnReturns),
+    vatOnReturns: normalizeNumber(vatOnReturnsComputed),
     scVatAdj: normalizeNumber(scVatAdj),
     pwdVatAdj: normalizeNumber(pwdVatAdj),
     soloParentVatAdj: normalizeNumber(soloParentVatAdj),
+    medalOfValorVatAdj: normalizeNumber(medalOfValorVatAdj),
     zeroRatedVatAdj: normalizeNumber(zeroRatedVatAdj),
     refundTotal: normalizeNumber(refundTotal),
     refundNetAmount: normalizeNumber(refundNetAmount),
@@ -447,6 +488,7 @@ export const calcReadingData = (
     nonCashPayments,
     totalReturnAmount: normalizeNumber(Math.abs(totalReturnAmount)),
     serviceCharge: normalizeNumber(serviceCharge),
+    cashTendered: normalizeNumber(cashTendered),
     vatPayable: normalizeNumber(vatPayable),
   };
 };

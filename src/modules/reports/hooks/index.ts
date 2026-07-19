@@ -7,6 +7,8 @@ import Moment from "moment-timezone";
 import { getTransactionSummary } from "../../../utils/bir/transaction";
 import { getRefundSummary, getReturnSummary, getVoidSummary } from "../../../utils/bir/refund";
 import { calcReadingData } from "../../../utils/bir/calcReadingData";
+import { SalesSummary, DetailedSalesReport, SALES_SUMMARY_COLUMNS } from "../../../utils/bir/salesSummary";
+import { renderReading } from "../../../utils/bir/readingReceipt";
 
 const MP = Transaction.MONEY_PRECISION;
 
@@ -989,7 +991,7 @@ export async function saveJournal(
   stt?: string,
   end?: string,
   upload = false,
-  type: "all" | "z" | "x" = "all",
+  type: "all" | "z" | "x" | "orderslip" | "billout" = "all",
 ) {
   try {
     console.log("saveJournal called", { stt, end, upload, type });
@@ -1025,6 +1027,10 @@ export async function saveJournal(
           journal += journalData.zReading || "";
         } else if (type === "x") {
           journal += journalData.xReading || "";
+        } else if (type === "billout") {
+          journal += journalData.billout || "";
+        } else if (type === "orderslip") {
+          journal += journalData.orderslip || "";
         } else {
           journal += journalData.transaction || "";
           journal += journalData.refund || "";
@@ -1034,11 +1040,15 @@ export async function saveJournal(
       });
     }
 
+    const journalTypeLabel =
+      type === "z" ? "Z-Reading " :
+      type === "x" ? "X-Reading " :
+      type === "billout" ? "Bill Outs " :
+      type === "orderslip" ? "Order Slips " : "";
+
     if (!journal.trim()) {
-      const typeLabel =
-        type === "z" ? "Z-Reading " : type === "x" ? "X-Reading " : "";
       alert(
-        `No ${typeLabel}journal data found for the selected date range.`,
+        `No ${journalTypeLabel}journal data found for the selected date range.`,
       );
       return null;
     }
@@ -1047,7 +1057,7 @@ export async function saveJournal(
       parseInt(sttS),
       parseInt(endS),
     );
-    const typeLabel = type === "z" ? "Z-Reading " : type === "x" ? "X-Reading " : "";
+    const typeLabel = journalTypeLabel;
     const filename = `BIR eSales ${typeLabel}Journal ${timeRange.start} to ${timeRange.end}.txt`;
 
     // Create and download text file
@@ -1075,9 +1085,10 @@ export async function saveSalesSummary(
   stt?: string,
   end?: string,
   upload = false,
+  consolidate = false,
 ) {
   try {
-    console.log("saveSalesSummary called", { stt, end, upload });
+    console.log("saveSalesSummary called", { stt, end, upload, consolidate });
 
     const userUid = getCurrentUserUid();
     if (!userUid) {
@@ -1091,34 +1102,70 @@ export async function saveSalesSummary(
     const sttS = parseInt(Moment(stt, "YYMMDD").startOf("day").format("X"));
     const endS = parseInt(Moment(end, "YYMMDD").endOf("day").format("X"));
 
-    // Query all necessary data: transactions, refunds, returns, voids
-    const [transactionsSnapshot, refundsSnapshot, returnsSnapshot, voidsSnapshot, zCountersSnapshot] = await Promise.all([
+    // Fetch the same sources as the Z-reading so numbers align. zCounters and
+    // zReadingHistory are whole-node reads (per-date Z-Counter / Reset Counter /
+    // overrun snapshots); prevTxns seeds the Grand Accumulated beginning balance.
+    const [
+      transactionsSnapshot,
+      refundsSnapshot,
+      returnsSnapshot,
+      voidsSnapshot,
+      zCountersSnapshot,
+      zReadingHistorySnapshot,
+      prevTxnsSnapshot,
+    ] = await Promise.all([
       get(query(ref(database, `${userUid}/transactions`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
       get(query(ref(database, `${userUid}/refunds`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
       get(query(ref(database, `${userUid}/returns`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
       get(query(ref(database, `${userUid}/voids`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
       get(ref(database, `${userUid}/zCounters`)),
+      get(ref(database, `${userUid}/zReadingHistory`)),
+      get(query(ref(database, `${userUid}/transactions`), orderByKey(), endAt(`${sttS - 1}`))),
     ]);
 
-    // Get transaction summary using BIR-compliant logic
-    const txnSummary = getTransactionSummary(transactionsSnapshot);
-
-    // Get refund, return, void summaries
     const refundSummary = getRefundSummary(refundsSnapshot);
     const returnSummary = getReturnSummary(returnsSnapshot);
     const voidSummary = getVoidSummary(voidsSnapshot);
-
-    // Calculate all BIR totals using the core calculation engine
-    const readingData = calcReadingData(txnSummary, refundSummary as any, returnSummary, voidSummary);
-
-    // Get user settings
     const settings = await exportUtils.getUserSettings();
+
+    const zCounters = (zCountersSnapshot.exists() ? zCountersSnapshot.val() : {}) as Record<string, number>;
+    const zReadingHistory = (zReadingHistorySnapshot.exists() ? zReadingHistorySnapshot.val() : {}) as Record<string, any>;
+
+    // Grand Accumulated beginning balance = sum of all sales before the range.
+    const prevSummary = getTransactionSummary(prevTxnsSnapshot);
+    const startingAccumBalance = prevSummary.reduce(
+      (acc, i: any) => acc + (i.vatableSales || 0) + (i.vatAmount || 0) + (i.vatExemptSales || 0) + (i.zeroRatedSales || 0),
+      0,
+    );
+
+    // Per-date overrun (short/over) and Reset Counter snapshots from Z history.
+    const overrunByDate: Record<string, number> = {};
+    const resetNoByDate: Record<string, number> = {};
+    Object.values(zReadingHistory || {}).forEach((entry: any) => {
+      const yymmdd = entry?.dateRange;
+      if (!yymmdd) return;
+      if (entry?.shortOver != null) {
+        const entryDate = Moment(yymmdd, "YYMMDD").startOf("day").unix();
+        if (entryDate >= sttS && entryDate <= endS) overrunByDate[yymmdd] = entry.shortOver;
+      }
+      if (entry?.resetNo != null) resetNoByDate[yymmdd] = Number(entry.resetNo);
+    });
+
+    const data = SalesSummary({
+      txnSnapshot: transactionsSnapshot,
+      startingAccumBalance,
+      returnSummary,
+      refundSummary,
+      voidSummary,
+      zCounters,
+      overrunByDate,
+      resetNoByDate,
+      zReadNo: settings.zReadNo ?? 0,
+      consolidate,
+    });
+
     const timeRange = exportUtils.formatTimeRange(sttS, endS);
 
-    // Build workbook data
-    const workbookData: { [sheetName: string]: any[][] } = {};
-
-    // Main sales summary sheet
     const headerTitle = ["BIR SALES SUMMARY REPORT"];
     const metaRows = [
       ["Name", settings.name],
@@ -1135,102 +1182,171 @@ export async function saveSalesSummary(
       ["Serial No", settings.receiptDetails?.SN || ""],
       ["MIN", settings.receiptDetails?.MIN || ""],
       ["POS Terminal No", settings.posTerminalNumber || "1"],
-      ["Generated", Moment().format("MMMM D, YYYY h:mma")],
+      ["Generated", Moment().format("MM/DD/YYYY h:mm a")],
       ["Report Period", `${timeRange.start} to ${timeRange.end}`],
       ["", ""],
     ];
 
-    // BIR-compliant column headers (Annex E-1)
-    const headerColumns = [
-      "Date",
-      `Beginning ${settings.receiptDetails?.receiptType || "OR"} No.`,
-      `Ending ${settings.receiptDetails?.receiptType || "OR"} No.`,
-      "Gross Sales for the Day",
-      "VATable Sales",
-      "VAT-Exempt Sales",
-      "VAT Zero-Rated Sales",
-      "VAT Amount",
-      "Less Discount SC",
-      "Less Discount PWD",
-      "Less Discount NAAC",
-      "Less Discount Solo Parent",
-      "Less Discount Others",
-      "Less Returns",
-      "Less Voids",
-      "Less Refunds",
-      "Total Deductions",
-      "Adjustment on VAT: SC",
-      "Adjustment on VAT: PWD",
-      "Adjustment on VAT: Solo Parent",
-      "Adjustment on VAT: Reg Txns",
-      "Adjustment on VAT: Zero Rated",
-      "Adjustment on VAT: Others",
-      "Adjustment on VAT: Returns",
-      "Adjustment on VAT: Void Vat",
-      "Adjustment on VAT: Refund Vat",
-      "Total VAT Adjustment",
-      "VAT Payable",
-      "Net Sales",
-      "Reset Counter",
-      "Z-Counter",
-    ];
-
-    // Build summary row with all BIR calculations
-    const summaryRow = [
-      Moment.unix(sttS).format("MM/DD/YYYY"),
-      readingData.beginningCI,
-      readingData.endingCI,
-      readingData.grossSales,
-      readingData.vatableSales,
-      readingData.vatExemptSales,
-      readingData.zeroRatedSales,
-      readingData.vatAmount,
-      readingData.scDiscount,
-      readingData.pwdDiscount,
-      readingData.naacDiscount,
-      readingData.soloParentDiscount,
-      readingData.othersDiscount,
-      readingData.lessReturn,
-      readingData.lessVoid,
-      readingData.refundTotal,
-      (Number(readingData.scDiscount) + Number(readingData.pwdDiscount) + Number(readingData.naacDiscount) +
-       Number(readingData.soloParentDiscount) + Number(readingData.othersDiscount) +
-       Number(readingData.lessReturn) + Number(readingData.lessVoid) + Number(readingData.refundTotal)).toFixed(2),
-      readingData.scVatAdj,
-      readingData.pwdVatAdj,
-      readingData.soloParentVatAdj,
-      readingData.othersTrans, // Reg Txns VAT Adj
-      readingData.zeroRatedVatAdj,
-      0, // Others (for future use)
-      readingData.vatOnReturns,
-      voidSummary?.totalVoidVat ? Number(voidSummary.totalVoidVat).toFixed(2) : 0, // Void VAT
-      readingData.refundVatReturns,
-      readingData.lessVatAdjustment,
-      readingData.vatPayable || (Number(readingData.vatAmount) - Number(readingData.vatOnReturns) - Number(readingData.refundVatReturns) - (voidSummary?.totalVoidVat || 0)).toFixed(2),
-      readingData.netAmount,
-      settings.BIRresetNo ?? 0,
-      settings.zReadNo ?? 1,
-    ];
-
+    const workbookData: { [sheetName: string]: any[][] } = {};
     workbookData["SalesSummary"] = [
       headerTitle,
       ...metaRows,
-      headerColumns,
-      summaryRow,
+      SALES_SUMMARY_COLUMNS,
+      ...data.sheet1,
     ];
+    if (data.sheetBreakdown.length > 1) {
+      workbookData["Breakdown"] = data.sheetBreakdown;
+    }
 
-    const filename = `Sales Summary Report ${timeRange.start} to ${timeRange.end}`;
+    const label = consolidate ? "Monthly Sales Summary" : "Sales Summary Report";
+    const filename = `${label} ${timeRange.start} to ${timeRange.end}`;
     const result = await exportUtils.downloadExcelFile(workbookData, filename, {
       trainingMode: (globalThis as any).isInTrainingMode || false,
     });
 
     console.log(`Sales summary generated and downloaded: ${result}`);
     return result;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error in saveSalesSummary:", error);
     alert(`Error generating sales summary: ${error.message}`);
     return null;
   }
+}
+
+/**
+ * Detailed Sales Report (per-transaction) XLSX. Ported to align with the mobile
+ * app's saveDetailedSalesReport.
+ */
+export async function saveDetailedSalesReport(
+  stt?: string,
+  end?: string,
+  upload = false,
+) {
+  try {
+    console.log("saveDetailedSalesReport called", { stt, end, upload });
+    const userUid = getCurrentUserUid();
+    if (!userUid) throw new Error("User not authenticated");
+    if (!stt || !end) throw new Error("Start and end dates are required");
+
+    const sttS = parseInt(Moment(stt, "YYMMDD").startOf("day").format("X"));
+    const endS = parseInt(Moment(end, "YYMMDD").endOf("day").format("X"));
+
+    const [transactionsSnapshot, refundsSnapshot, returnsSnapshot, voidsSnapshot] = await Promise.all([
+      get(query(ref(database, `${userUid}/transactions`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/refunds`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/returns`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/voids`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+    ]);
+
+    const refundSummary = getRefundSummary(refundsSnapshot);
+    const returnSummary = getReturnSummary(returnsSnapshot);
+    const voidSummary = getVoidSummary(voidsSnapshot);
+
+    const { sheetRows } = DetailedSalesReport(transactionsSnapshot, {
+      refundSummary,
+      returnSummary,
+      voidSummary,
+    });
+
+    const timeRange = exportUtils.formatTimeRange(sttS, endS);
+    const workbookData: { [sheetName: string]: any[][] } = {
+      "Detailed Sales Summary": sheetRows,
+    };
+    const filename = `Detailed Sales Summary ${timeRange.start} to ${timeRange.end}`;
+    const result = await exportUtils.downloadExcelFile(workbookData, filename, {
+      trainingMode: (globalThis as any).isInTrainingMode || false,
+    });
+    console.log(`Detailed sales report generated and downloaded: ${result}`);
+    return result;
+  } catch (error: any) {
+    console.error("Error in saveDetailedSalesReport:", error);
+    alert(`Error generating detailed sales report: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Custom Reading — a Z-layout reading over an arbitrary date range, computed
+ * fresh (not replayed from stored journal text) so Previous/Present Accumulated
+ * Sales reflect the 12-digit rollover carryover. Ported to align with the mobile
+ * saveZCustom: previousAccSales = accumulatedSalesCarryover + gross since the last
+ * accumulated-sales reset. Returns the reading text (also downloaded when `download`).
+ */
+export async function generateCustomReading(
+  stt?: string,
+  end?: string,
+  download = true,
+): Promise<string | null> {
+  const userUid = getCurrentUserUid();
+  if (!userUid) throw new Error("User not authenticated");
+  if (!stt || !end) throw new Error("Start and end dates are required");
+
+  const sttS = parseInt(Moment(stt, "YYMMDD").startOf("day").format("X"));
+  const endS = parseInt(Moment(end, "YYMMDD").endOf("day").format("X"));
+
+  const settings = await exportUtils.getUserSettings();
+  const accResetAt = String((settings as any).accumulatedSalesResetAt || "0");
+  const startAfterReset = String(parseInt(accResetAt, 10) + 1);
+
+  const [transactionsSnapshot, refundsSnapshot, returnsSnapshot, voidsSnapshot, prevTxnsSnapshot] =
+    await Promise.all([
+      get(query(ref(database, `${userUid}/transactions`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/refunds`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/returns`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/voids`), orderByKey(), startAt(`${sttS}`), endAt(`${endS - 1}`))),
+      get(query(ref(database, `${userUid}/transactions`), orderByKey(), startAt(startAfterReset), endAt(`${sttS - 1}`))),
+    ]);
+
+  const txnSummary = getTransactionSummary(transactionsSnapshot);
+  const refundSummary = getRefundSummary(refundsSnapshot);
+  const returnSummary = getReturnSummary(returnsSnapshot);
+  const voidSummary = getVoidSummary(voidsSnapshot);
+
+  const VAT_RATE = 0.12;
+  const prevSummary = getTransactionSummary(prevTxnsSnapshot);
+  const carryover = Number((settings as any).accumulatedSalesCarryover) || 0;
+  const previousAccSales =
+    carryover +
+    prevSummary.reduce(
+      (s, i: any) =>
+        s +
+        (i.grossSales ??
+          ((i.vatableSales || 0) + (i.vatAmount || 0) + (i.vatExemptSales || 0) + ((i.zeroRatedSales || 0) * (1 + VAT_RATE)))),
+      0,
+    );
+
+  const text = renderReading(
+    {
+      type: "Z",
+      txnSummary,
+      refundSummary,
+      returnSummary,
+      voidSummary,
+      sttS,
+      endS,
+      previousAccSales,
+      cashier: (settings as any).account ? String((settings as any).account).split("@")[0] : "",
+      posTerminalNumber: (settings as any).posTerminalNumber || "",
+      cashdrawer: {},
+    },
+    settings,
+  );
+
+  if (download) {
+    const timeRange = exportUtils.formatTimeRange(sttS, endS);
+    const filename = `${(globalThis as any).isInTrainingMode ? "[TRAINING MODE] " : ""}Custom Reading ${timeRange.start} to ${timeRange.end}.txt`;
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  }
+
+  return text;
 }
 
 // Special discounts Excel report - port from mobile specialDiscounts.ts
@@ -1894,7 +2010,7 @@ export async function saveProductMix(
 export async function viewJournal(
   stt?: string,
   end?: string,
-  type: "all" | "z" | "x" = "all",
+  type: "all" | "z" | "x" | "orderslip" | "billout" = "all",
 ) {
   try {
     console.log("viewJournal called", { stt, end, type });
@@ -1929,6 +2045,10 @@ export async function viewJournal(
           journal += journalData.zReading || "";
         } else if (type === "x") {
           journal += journalData.xReading || "";
+        } else if (type === "billout") {
+          journal += journalData.billout || "";
+        } else if (type === "orderslip") {
+          journal += journalData.orderslip || "";
         } else {
           journal += journalData.transaction || "";
           journal += journalData.refund || "";
@@ -2006,7 +2126,7 @@ export async function printZCustom(
 export async function printJournal(
   stt?: string,
   end?: string,
-  type: "all" | "z" | "x" = "all",
+  type: "all" | "z" | "x" | "orderslip" | "billout" = "all",
 ) {
   console.log("printJournal called - Print functionality adapted for web");
   try {

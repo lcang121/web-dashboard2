@@ -8,6 +8,7 @@ const SENIOR_RATE = 0.2;
 const PWD_RATE = 0.2;
 const NAAC_RATE = 0.2;
 const SOLO_PARENT_RATE = 0.1;
+const MEDAL_OF_VALOR_RATE = 0.2;
 const COMMODITY_RATE = 0.05;
 
 const normalizeDiscountType = (type: string | null | undefined): string => {
@@ -18,9 +19,26 @@ const normalizeDiscountType = (type: string | null | undefined): string => {
   if (['sp', 'soloparent', 'solo_parent'].includes(t)) return 'soloParent';
   if (['ntl', 'ntlathlete', 'naac', 'nationalathlete'].includes(t)) return 'ntlAthlete';
   if (['diplomat'].includes(t)) return 'diplomat';
+  if (['mov', 'medalofvalor', 'medal_of_valor'].includes(t)) return 'medalOfValor';
   if (['commodity'].includes(t)) return 'commodity';
   if (['regular'].includes(t)) return 'regular';
+  // Promotional discounts behave exactly like regular percentage discounts.
+  if (['promotional', 'promo'].includes(t)) return 'regular';
   return String(type || '');
+};
+
+const normalizePaymentType = (type: string | null | undefined): string => {
+  const raw = String(type || '').trim();
+  const lower = raw.toLowerCase();
+  if (!lower) return 'Cash';
+  if (lower === 'gcash') return 'GCash';
+  if (lower === 'maya') return 'Maya';
+  if (lower === 'cash') return 'Cash';
+  if (lower === 'credit card') return 'Credit Card';
+  if (lower === 'debit card') return 'Debit Card';
+  if (lower === 'gift card') return 'Gift Card';
+  if (lower === 'check' || lower === 'cheque') return 'Check';
+  return raw;
 };
 
 const isAdjustmentClone = (item: any): boolean => {
@@ -42,6 +60,8 @@ interface TransactionSummaryItem {
   date: string;
   receiptNo: number | string | null;
   receiptCycle: number | string | null;
+  txnNo: number | string;
+  manualReference: string;
   vatableSales: number;
   vatAmount: number;
   vatExemptSales: number;
@@ -53,6 +73,7 @@ interface TransactionSummaryItem {
       pwd: number;
       naac: number;
       soloParent: number;
+      medalOfValor: number;
       others: number;
     };
     returns: number;
@@ -64,6 +85,7 @@ interface TransactionSummaryItem {
       pwd: number;
       naac: number;
       soloParent: number;
+      medalOfValor: number;
       others: number;
     };
     returns: number;
@@ -82,7 +104,8 @@ interface TransactionSummaryItem {
 
 export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] => {
   const data: TransactionSummaryItem[] = [];
-  const vatExemptingDiscounts = ['senior', 'pwd', 'soloParent', 'commodity'];
+  // NAAC is VATable; senior, pwd, solo parent, medal of valor, commodity get VAT exemption
+  const vatExemptingDiscounts = ['senior', 'pwd', 'soloParent', 'medalOfValor', 'commodity'];
   const zeroRatedDiscounts = ['diplomat'];
 
   const applySalesBucket = ({
@@ -141,12 +164,12 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
     let vatExemptSales = 0;
     let zeroRatedSales = 0;
     let deductions = {
-      discount: { sc: 0, pwd: 0, naac: 0, soloParent: 0, others: 0 },
+      discount: { sc: 0, pwd: 0, naac: 0, soloParent: 0, medalOfValor: 0, others: 0 },
       returns: 0,
       voids: 0,
     };
     let adjustmentOnVat = {
-      discount: { sc: 0, pwd: 0, naac: 0, soloParent: 0, others: 0 },
+      discount: { sc: 0, pwd: 0, naac: 0, soloParent: 0, medalOfValor: 0, others: 0 },
       returns: 0,
       others: 0,
     };
@@ -177,8 +200,6 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
       const baseAmount = totalPrice / (1 + VAT_RATE);
       const refunded = item.refunded;
       const returned = item.returned;
-      const refund = item.refund;
-      const voided = item.voided;
 
       // Handle PAX discount items
       if (item.paxDiscount) {
@@ -194,7 +215,7 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
           const normalizedPaxType = normalizeDiscountType(paxDiscType);
           const discRate =
             (parseFloat((discObj as any).percent) || 0) / 100 ||
-            (paxDiscType === 'senior' || paxDiscType === 'pwd'
+            (paxDiscType === 'senior' || paxDiscType === 'pwd' || paxDiscType === 'medalOfValor'
               ? SENIOR_RATE
               : paxDiscType === 'ntl'
                 ? NAAC_RATE
@@ -225,6 +246,12 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
             deductions.discount.pwd += pwdDisc;
             if (!isCommodity) {
               adjustmentOnVat.discount.pwd += pwdDisc * (VAT_RATE / PWD_RATE);
+            }
+          } else if (normalizedPaxType === 'medalOfValor') {
+            const movDisc = proportionalAmount * discRate;
+            deductions.discount.medalOfValor += movDisc;
+            if (!isCommodity) {
+              adjustmentOnVat.discount.medalOfValor += movDisc * (VAT_RATE / MEDAL_OF_VALOR_RATE);
             }
           } else if (normalizedPaxType === 'ntlAthlete') {
             deductions.discount.naac += proportionalAmount * discRate;
@@ -269,6 +296,9 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
       } else if (itemDiscType === 'pwd') {
         deductions.discount.pwd += baseAmount * PWD_RATE;
         adjustmentOnVat.discount.pwd += baseAmount * PWD_RATE * (VAT_RATE / PWD_RATE);
+      } else if (itemDiscType === 'medalOfValor') {
+        deductions.discount.medalOfValor += baseAmount * MEDAL_OF_VALOR_RATE;
+        adjustmentOnVat.discount.medalOfValor += baseAmount * MEDAL_OF_VALOR_RATE * (VAT_RATE / MEDAL_OF_VALOR_RATE);
       } else if (itemDiscType === 'commodity') {
         deductions.discount.others += baseAmount * COMMODITY_RATE;
       } else if (itemDiscType === 'ntlAthlete') {
@@ -290,6 +320,9 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
         } else if (txnDiscType === 'pwd') {
           deductions.discount.pwd += baseAmount * PWD_RATE;
           adjustmentOnVat.discount.pwd += baseAmount * PWD_RATE * (VAT_RATE / PWD_RATE);
+        } else if (txnDiscType === 'medalOfValor') {
+          deductions.discount.medalOfValor += baseAmount * MEDAL_OF_VALOR_RATE;
+          adjustmentOnVat.discount.medalOfValor += baseAmount * MEDAL_OF_VALOR_RATE * (VAT_RATE / MEDAL_OF_VALOR_RATE);
         } else if (txnDiscType === 'commodity') {
           deductions.discount.others += baseAmount * COMMODITY_RATE;
         } else if (txnDiscType === 'ntlAthlete') {
@@ -309,6 +342,8 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
         deductions.returns += baseAmount - baseAmount * SENIOR_RATE;
       } else if (returned && discountType === 'pwd') {
         deductions.returns += baseAmount - baseAmount * PWD_RATE;
+      } else if (returned && discountType === 'medalOfValor') {
+        deductions.returns += baseAmount - baseAmount * MEDAL_OF_VALOR_RATE;
       } else if (returned && discountType === 'commodity') {
         deductions.returns += baseAmount - baseAmount * COMMODITY_RATE;
       } else if (returned && discountType === 'ntlAthlete') {
@@ -326,11 +361,13 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
         adjustmentOnVat.returns += baseAmount * VAT_RATE;
       }
 
-      // Refunds
+      // Refunds — VAT adjustment for refunds captured separately (refundVatReturns).
       if (refunded && discountType === 'senior') {
         deductions.returns += baseAmount - baseAmount * SENIOR_RATE;
       } else if (refunded && discountType === 'pwd') {
         deductions.returns += baseAmount - baseAmount * PWD_RATE;
+      } else if (refunded && discountType === 'medalOfValor') {
+        deductions.returns += baseAmount - baseAmount * MEDAL_OF_VALOR_RATE;
       } else if (refunded && discountType === 'commodity') {
         deductions.returns += baseAmount - baseAmount * COMMODITY_RATE;
       } else if (refunded && discountType === 'ntlAthlete') {
@@ -346,15 +383,48 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
       }
     }
 
-    // Payment totals
+    // Per-transaction: payments. Use high-precision item-based due for non-split
+    // payments to avoid cumulative cent loss from summing pre-rounded totals.
+    const preciseTxnTotal = ($txn.items || []).reduce(
+      (sum: number, itm: any) => sum + (Number(itm?.$amountDue) || 0),
+      0
+    ) / MP;
+    const parsedTotal = parseFloat(value.total);
+    const hasAdjustmentMarkers =
+      !!value.voidNo ||
+      !!value.returnNo ||
+      !!value.refundNo ||
+      (value.returns && Object.keys(value.returns).length > 0) ||
+      (value.refunds && Object.keys(value.refunds).length > 0) ||
+      (Array.isArray(value.items) && value.items.some((item: any) => item && (
+        item.voided || item.returned || item.refunded || item.return != null || item.refund != null
+      )));
+    const paymentTotalForSingleTender =
+      Number.isFinite(parsedTotal) && parsedTotal <= 0
+        ? parsedTotal
+        : (!hasAdjustmentMarkers && preciseTxnTotal > 0 ? preciseTxnTotal : parsedTotal);
+
     if (value?.payments && typeof value.payments === 'object' && Object.keys(value.payments).length > 0) {
+      let splitPaymentTotal = 0;
       for (const [type, amount] of Object.entries(value.payments as any)) {
-        const amt = parseFloat(amount) || 0;
-        paymentTypeTotals[type] = (paymentTypeTotals[type] || 0) + amt;
+        const amt = parseFloat(amount as any) || 0;
+        const normalizedType = normalizePaymentType(type);
+        paymentTypeTotals[normalizedType] = (paymentTypeTotals[normalizedType] || 0) + amt;
+        splitPaymentTotal += amt;
+      }
+      // Legacy records with an all-zero payments object: fall back to declared type + total.
+      if (splitPaymentTotal <= 0) {
+        const type = normalizePaymentType(value.paymentType || 'Cash');
+        const fallbackAmt = Number.isFinite(parsedTotal)
+          ? parsedTotal
+          : (parseFloat(value.paymentReceived) || 0);
+        paymentTypeTotals[type] = (paymentTypeTotals[type] || 0) + fallbackAmt;
       }
     } else {
-      const type = value.paymentType || 'Cash';
-      const totalAmt = parseFloat(value.total) || 0;
+      const type = normalizePaymentType(value.paymentType || 'Cash');
+      const totalAmt = Number.isFinite(paymentTotalForSingleTender)
+        ? paymentTotalForSingleTender
+        : (parseFloat(value.paymentReceived) || 0);
       paymentTypeTotals[type] = (paymentTypeTotals[type] || 0) + totalAmt;
     }
 
@@ -362,9 +432,10 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
       service += parseFloat(value.service) || 0;
     }
 
-    const date = Moment.unix(key).format('YYYY-MM-DD');
+    const date = Moment(key, 'X').format('YYYY-MM-DD');
     const receiptNo = value.receiptNo;
     const receiptCycle = value.receiptCycle;
+    const txnNo = value.txnNo ?? value.transactionNo ?? 0;
 
     let giftCardOverAmount = 0;
     if (value.paymentType === 'Gift Card' && value.giftCard) {
@@ -403,6 +474,7 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
       }
     }
 
+    // Gross = invoice total before discounts (quantity * price for all items)
     const grossSales = ($txn.$baseSales || 0) / MP;
 
     data.push({
@@ -410,6 +482,10 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
       date,
       receiptNo,
       receiptCycle,
+      txnNo,
+      // Manual SI/OR reference (set when a manual receipt was issued while the POS
+      // was down) — used by Sales Summary's "Sales Issued w/ Manual SI/OR" column.
+      manualReference: value.manualReference || '',
       vatableSales,
       vatAmount,
       vatExemptSales,

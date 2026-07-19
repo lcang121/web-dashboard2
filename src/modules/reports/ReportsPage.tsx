@@ -5,6 +5,9 @@ import DailyTab from './Comps/DailyTab';
 import CustomTab from './Comps/CustomTab';
 import RefundsTab from './Comps/RefundsTab';
 import ReturnsTab from './Comps/ReturnsTab';
+import VoidsTab from './Comps/VoidsTab';
+import MonthlyTab from './Comps/MonthlyTab';
+import AuditTrailTab from './Comps/AuditTrailTab';
 import ManualTab from './Comps/ManualTransactions';
 
 export default function ReportsPage() {
@@ -19,6 +22,9 @@ export default function ReportsPage() {
     { id: 'custom', label: 'Custom', path: 'custom' },
     { id: 'refunds', label: 'Refunds', path: 'refunds' },
     { id: 'returns', label: 'Returns', path: 'returns' },
+    { id: 'voids', label: 'Voids', path: 'voids' },
+    { id: 'monthly', label: 'Monthly', path: 'monthly' },
+    { id: 'audit', label: 'Audit Trail', path: 'audit' },
   ];
 
   // Update active tab based on current URL
@@ -60,6 +66,9 @@ export default function ReportsPage() {
           <Route path="custom" element={<CustomTab />} />
           <Route path="refunds" element={<RefundsTab />} />
           <Route path="returns" element={<ReturnsTab />} />
+          <Route path="voids" element={<VoidsTab />} />
+          <Route path="monthly" element={<MonthlyTab />} />
+          <Route path="audit" element={<AuditTrailTab />} />
           <Route index element={<DailyTab />} />
         </Routes>
       </div>

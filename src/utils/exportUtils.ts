@@ -269,12 +269,17 @@ export async function getUserSettings() {
           SN: data.receiptDetails?.SN || '',
           MIN: data.receiptDetails?.MIN || '',
           permitNo: data.receiptDetails?.permitNo || '',
-          receiptType: data.receiptDetails?.receiptType || 'OR'
+          receiptType: data.receiptDetails?.receiptType || 'OR',
+          BIR: data.receiptDetails?.BIR ?? false,
         },
+        miniprinter: data.miniprinter ?? false,
         BIRStartDate: data.BIRStartDate || '',
         BIRresetNo: data.BIRresetNo || 0,
         zReadNo: data.zReadNo || 1,
         accumulatedSalesResetAt: data.accumulatedSalesResetAt || '0',
+        accumulatedSalesCarryover: Number(data.accumulatedSalesCarryover) || 0,
+        posTerminalNumber: data.posTerminalNumber || '1',
+        account: data.account || '',
         servicePercentage: data.servicePercentage || 0,
         lastEndOfDay: data.lastEndOfDay || 0
       };
