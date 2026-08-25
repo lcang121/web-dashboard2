@@ -55,12 +55,50 @@ export function normalize(out: string): string {
 
 export function fixnum(num: number | string, { long = false }: { long?: boolean } = {}): string {
   if (num == 0) num = 0;
-  const parsed = parseFloat('' + num) || 0;
+  // Round to nearest 0.01 (cents). Thousands separators are stripped first: the
+  // output of this function is 0,000.00, so a value that has already been
+  // formatted once would otherwise parse as its first group only
+  // ("1,234.56" -> 1) and lose its magnitude.
+  const parsed = parseFloat(String(num).replace(/,/g, '')) || 0;
   const rounded = Math.round(parsed * 100) / 100;
   num = rounded.toFixed(2);
   const [whole, unwhole] = num.split('.');
   const delimitedWhole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return !long && unwhole === '00' ? delimitedWhole : `${delimitedWhole}.${unwhole}`;
+}
+
+/**
+ * Re-format the given column indexes of a sheet's data rows (row 0 is the
+ * header) as 0,000.00 money strings.
+ */
+export function formatMoneyColumns<T extends any[]>(rows: T[], moneyCols: number[]): T[] {
+  return rows.map((row, i) => {
+    if (i === 0 || !Array.isArray(row)) return row;
+    const next = [...row] as T;
+    for (const c of moneyCols) {
+      const v = next[c];
+      if (v === '' || v == null) continue;
+      next[c] = fixnum(v, { long: true }) as any;
+    }
+    return next;
+  });
+}
+
+export function money(
+  num: number | string,
+  { long = false, currency = 'PHP' }: { long?: boolean; currency?: string } = {},
+): string {
+  // Round to nearest 0.01 (cents)
+  const parsed = Number(num) || 0;
+  const rounded = Math.round(parsed * 100) / 100;
+  const asMoney = rounded.toFixed(2);
+  // NOTE: this prevents: -0 -> 'P-0.00'
+  if (Number(asMoney) === 0) num = 0;
+
+  if (typeof num !== 'string') {
+    if (typeof num !== 'number' || isNaN(num)) return currency;
+  }
+  return currency + ' ' + fixnum(num, { long });
 }
 
 type UnaryFunction = (source: any) => any;

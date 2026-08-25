@@ -5,16 +5,11 @@ import { Menu, Download, Loader } from 'lucide-react';
 import { ref, query, orderByKey, startAt, endAt, onValue, off } from 'firebase/database';
 import { database } from '../../../config/firebase';
 import { useAuth } from '../../../contexts/AuthContext';
-import Transaction from '../../../models/Transaction';
 import _ from 'lodash-es';
-
-interface MixRow {
-  item: string;
-  option: string;
-  category: string;
-  quantity: number;
-  sales: number; // pesos
-}
+import {
+  aggregateProductMixFromTransactions,
+  type ProductMixRow as MixRow,
+} from '../../../utils/bir/productMix';
 
 const peso = (n: number) =>
   '₱' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -48,30 +43,15 @@ export default function ProductMixTab() {
     const txnsQuery = query(txnsRef, orderByKey(), startAt(`${sttS}`), endAt(`${endS}`));
 
     const handleUpdate = _.debounce((snapshot: any) => {
-      const mix = new Map<string, MixRow>();
-      if (snapshot.exists()) {
-        Object.entries(snapshot.val()).forEach(([key, val]) => {
-          if ((val as any)?.trainingMode) return;
-          const txn = new Transaction({ key: parseInt(key, 10), val: val as any });
-          for (const item of txn.items) {
-            if (!item) continue;
-            // Only actually-sold rows: positive qty, not a reversed/adjustment item.
-            if (item.quantity <= 0) continue;
-            const o = item.original || {};
-            if (o.refunded || o.returned || o.voided || o.refund != null || o.return != null) continue;
-            const title = o.title || '(unnamed)';
-            const option = o.option || '';
-            const category = o.categoryOriginal || o.category || '';
-            const mapKey = `${title}|${option}`;
-            const sales = (item.quantity * item.price) / Transaction.MONEY_PRECISION;
-            const cur = mix.get(mapKey) || { item: title, option, category, quantity: 0, sales: 0 };
-            cur.quantity += item.quantity;
-            cur.sales += sales;
-            mix.set(mapKey, cur);
-          }
-        });
+      // Same aggregation as the export and the device (HelperFunctions/productMix),
+      // so the on-screen table and the downloaded sheet can't disagree.
+      if (!snapshot.exists()) {
+        setData({ loading: false, rows: [] });
+        return;
       }
-      const rows = [...mix.values()].sort((a, b) => b.sales - a.sales);
+      const { rows } = aggregateProductMixFromTransactions(
+        Object.values(snapshot.val() as Record<string, any>),
+      );
       setData({ loading: false, rows });
     }, 500);
 

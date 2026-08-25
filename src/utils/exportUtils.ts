@@ -4,6 +4,8 @@ import Transaction from '../models/Transaction';
 import Moment from 'moment-timezone';
 import { ref, query, orderByKey, startAt, endAt, get } from 'firebase/database';
 import { database } from '../config/firebase';
+import { appendTotalsRow } from './bir/totals';
+import { formatMoneyColumns } from './bir/receiptFormatters';
 
 export interface ExportOptions {
   filename?: string;
@@ -33,7 +35,7 @@ function downloadFile(content: string | ArrayBuffer, filename: string, mimeType:
 }
 
 // CSV Export Functions
-export async function downloadCsvFile(csvContent: string[][], filename: string, options: ExportOptions = {}) {
+export async function downloadCsvFile(csvContent: (string | number)[][], filename: string, options: ExportOptions = {}) {
   try {
     if (!csvContent || !Array.isArray(csvContent) || csvContent.length === 0) {
       throw new Error('No data to export');
@@ -89,13 +91,15 @@ export async function downloadExcelFile(
   }
 }
 
-// Transaction CSV generation (equivalent to mobile transactions function)
-export function generateTransactionsCsv(transactions: any[], isManual = false): string[][] {
+// Transactions CSV, mirroring the mobile app's csvs/transactions `transactions()`.
+// SI Number is shown for both the manual and the regular report; the money
+// columns are comma-formatted and a TOTAL row is appended last.
+export function generateTransactionsCsv(transactions: any[], isManual = false): (string | number)[][] {
   const headers = !isManual
-    ? ['Date', 'Time', 'Amount Due', 'Service']
-    : ['Date', 'Time', 'Manual SI/OR', 'Receipt Number', 'Amount Due', 'Service'];
+    ? ['Date', 'Time', 'SI Number', 'Amount Due', 'Service']
+    : ['Date', 'Time', 'Manual SI', 'SI Number', 'Amount Due', 'Service'];
 
-  const data = [headers];
+  const data: (string | number)[][] = [headers];
   const MP = Transaction.MONEY_PRECISION;
 
   transactions.forEach(txnData => {
@@ -111,24 +115,31 @@ export function generateTransactionsCsv(transactions: any[], isManual = false): 
       txn = new Transaction({ key, val });
     }
 
-    const time = Moment.unix(Number(txn.key));
-    const row = [];
+    const tsRaw = txn.original?.timestamp || txn.key;
+    const time = Moment.unix(parseInt(String(tsRaw), 10));
 
-    row.push(normalize(time.format('D MMM YYYY')));
-    row.push(normalize(time.format('h:mma')));
-
-    if (isManual) {
-      row.push(txn.original.manualReference || '');
-      row.push(txn.original.receiptNo || '');
-    }
-
+    const row: (string | number)[] = [];
+    row.push(normalize(time.format('MM/DD/YYYY')));
+    // Don't normalize() the time — it strips the colons (14:30:45 -> 143045).
+    // The CSV writer quotes cells, so colons are safe.
+    row.push(time.format('HH:mm:ss'));
+    if (isManual) row.push(txn.original.manualReference || '');
+    row.push(formatSI(txn.original?.receiptCycle ?? 0, txn.original?.receiptNo ?? ''));
     row.push(normalize(txn.$amountDue / MP));
     row.push(normalize(txn.$service / MP));
 
     data.push(row);
   });
 
-  return data;
+  const moneyCols = isManual ? [4, 5] : [3, 4];
+  return formatMoneyColumns(appendTotalsRow(data, { excludeHeaders: ['Manual SI'] }), moneyCols);
+}
+
+/** Format Sales Invoice number with cycle: XX-YYYYYY (e.g. "01-000012"). */
+function formatSI(cycle: number | string | undefined, no: number | string | undefined): string {
+  const c = String(cycle ?? 0).padStart(2, '0');
+  const n = String(no ?? '').padStart(6, '0');
+  return `${c}-${n}`;
 }
 
 // Generate refunds CSV (placeholder - would need actual implementation)

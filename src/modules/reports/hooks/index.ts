@@ -9,6 +9,9 @@ import { getRefundSummary, getReturnSummary, getVoidSummary } from "../../../uti
 import { calcReadingData } from "../../../utils/bir/calcReadingData";
 import { SalesSummary, DetailedSalesReport, SALES_SUMMARY_COLUMNS } from "../../../utils/bir/salesSummary";
 import { renderReading } from "../../../utils/bir/readingReceipt";
+import { aggregateProductMixFromSnapshot } from "../../../utils/bir/productMix";
+import { appendTotalsRow } from "../../../utils/bir/totals";
+import { specialDiscounts } from "../../../utils/bir/specialDiscounts";
 
 const MP = Transaction.MONEY_PRECISION;
 
@@ -21,8 +24,11 @@ function normalizeDiscountType(type?: string): string {
   if (["sp", "soloparent", "solo_parent"].includes(t)) return "soloParent";
   if (["ntl", "ntlathlete", "naac", "nationalathlete"].includes(t)) return "ntlAthlete";
   if (["diplomat"].includes(t)) return "diplomat";
+  if (["mov", "medalofvalor", "medal_of_valor"].includes(t)) return "medalOfValor";
   if (["commodity"].includes(t)) return "commodity";
   if (["regular"].includes(t)) return "regular";
+  // Promotional discounts behave exactly like regular percentage discounts.
+  if (["promotional", "promo"].includes(t)) return "regular";
   return String(type || "");
 }
 
@@ -30,6 +36,7 @@ function mapPaxDiscType(discType?: string): string {
   const normalized = normalizeDiscountType(discType);
   if (normalized === "ntlAthlete") return "ntlAthlete";
   if (normalized === "soloParent") return "soloParent";
+  if (normalized === "medalOfValor") return "medalOfValor";
   return normalized || "";
 }
 
@@ -45,6 +52,7 @@ function resolveDiscountType(item: any): string {
   if (pax.sp) return 'soloParent';
   if (pax.ntl) return 'ntlAthlete';
   if (pax.diplomat) return 'diplomat';
+  if (pax.medalOfValor) return 'medalOfValor';
   if (pax.regular) return 'regular';
   return "";
 }
@@ -55,12 +63,15 @@ function resolveDiscountRate(item: any, discountType: string): number {
     if (discountType === 'senior' && pax.senior) return (parseFloat(pax.senior.percent) || 20) / 100;
     if (discountType === 'pwd' && pax.pwd) return (parseFloat(pax.pwd.percent) || 20) / 100;
     if (discountType === 'soloParent' && pax.sp) return (parseFloat(pax.sp.percent) || 10) / 100;
+    if (discountType === 'medalOfValor' && pax.medalOfValor)
+      return (parseFloat(pax.medalOfValor.percent) || 20) / 100;
     if (discountType === 'regular' && pax.regular) return (parseFloat(pax.regular.percent) || 0) / 100;
   }
 
   if (discountType === 'senior') return 0.2;
   if (discountType === 'pwd') return 0.2;
   if (discountType === 'soloParent') return 0.1;
+  if (discountType === 'medalOfValor') return 0.2;
   return 0;
 }
 
@@ -85,142 +96,12 @@ function getUserSettings() {
   return exportUtils.getUserSettings();
 }
 
-// Get refund summary with proper Z-aligned calculations
-function getRefundSummary(snapshot: any): any[] {
-  const data: any[] = [];
-  
-  if (!snapshot || !snapshot.forEach) {
-    (data as any).beginningRefundSI = '';
-    (data as any).endingRefundSI = '';
-    return data;
-  }
-
-  const VAT_RATE = 0.12;
-  const NAAC_RATE = 0.20;
-
-  snapshot.forEach((snap: any) => {
-    const key = snap.key;
-    const value = snap.val();
-
-    if (value.trainingMode) return;
-
-    const matchKey = value.originalRefundKey != null
-      ? String(value.originalRefundKey)
-      : String(key);
-    const isRefundedItem = (item: any) =>
-      item != null && item.refund != null && String(item.refund) === matchKey;
-    const refundedItems = (value.items || []).filter(isRefundedItem);
-
-    let vatableSales = 0;
-    let vatAmount = 0;
-    let vatExemptSales = 0;
-    let zeroRatedSales = 0;
-
-    for (const item of refundedItems) {
-      const vatType = item._defaultVatType
-        ? item._defaultVatType
-        : item.zeroVAT
-        ? "vatExempt"
-        : "vatable";
-      const totalPrice = (item.price || 0) * Math.abs(item.quantity || 1);
-
-      // PAX discount: each guest's portion is independently classified
-      if (item.paxDiscount && typeof item.paxDiscount === 'object') {
-        const guestCount = Object.values(item.paxDiscount).reduce(
-          (a: number, e: any) => a + (parseInt(e?.guestCount, 10) || 0),
-          0,
-        );
-        if (guestCount > 0) {
-          const isCommodity = item.isCommodity === true;
-          const baseAmount = totalPrice / (1 + VAT_RATE);
-
-          for (const [paxDiscType, discObj] of Object.entries(item.paxDiscount)) {
-            const seatCount = parseInt((discObj as any)?.guestCount, 10) || 0;
-            if (seatCount <= 0) continue;
-            const guestRatio = seatCount / guestCount;
-            const proportionalBase = baseAmount * guestRatio;
-            const normalizedType = normalizeDiscountType(paxDiscType);
-
-            const discRate =
-              (parseFloat((discObj as any)?.percent) || 0) / 100 ||
-              (normalizedType === 'senior' || normalizedType === 'pwd'
-                ? 0.2
-                : normalizedType === 'soloParent'
-                ? 0.1
-                : normalizedType === 'ntlAthlete'
-                ? 0.2
-                : 0);
-
-            if (normalizedType === 'ntlAthlete') {
-              vatableSales += proportionalBase * (1 - NAAC_RATE);
-              vatAmount += proportionalBase * VAT_RATE;
-            } else if (['senior', 'pwd', 'soloParent', 'commodity'].includes(normalizedType)) {
-              if (isCommodity && (normalizedType === 'senior' || normalizedType === 'pwd')) {
-                const commodityRate = 0.05;
-                vatableSales += proportionalBase * (1 - commodityRate);
-                vatAmount += proportionalBase * (1 - commodityRate) * VAT_RATE;
-              } else {
-                vatExemptSales += proportionalBase * (1 - discRate);
-              }
-            } else if (normalizedType === 'diplomat') {
-              zeroRatedSales += proportionalBase;
-            } else if (normalizedType === 'regular') {
-              const proportionalGross = totalPrice * guestRatio;
-              const discounted = proportionalGross * (1 - discRate);
-              vatableSales += discounted / (1 + VAT_RATE);
-              const itemVat = discounted - discounted / (1 + VAT_RATE);
-              vatAmount += itemVat;
-            }
-          }
-          continue;
-        }
-      }
-
-      const discountType = resolveDiscountType(item);
-      if (discountType === "ntlAthlete") {
-        const naacBase = totalPrice / (1 + VAT_RATE);
-        const naacDiscountedBase = naacBase * (1 - NAAC_RATE);
-        vatableSales += naacDiscountedBase;
-        vatAmount += naacBase * VAT_RATE;
-      } else if (["senior", "pwd", "soloParent", "commodity"].includes(discountType)) {
-        const discountRate = resolveDiscountRate(item, discountType);
-        vatExemptSales += (totalPrice / VAT_RATE) * (1 - discountRate);
-      } else if (discountType === "diplomat") {
-        const diplomataBase = totalPrice / (1 + VAT_RATE);
-        zeroRatedSales += diplomataBase;
-      } else if (discountType === "regular" && (vatType === "vatable" || !vatType)) {
-        const paxRate = resolveDiscountRate(item, discountType);
-        const rawDiscount = item.discount || item.discountSubtotal || 0;
-        const effectiveRate = paxRate > 0 ? paxRate : rawDiscount / 100;
-        const discountedPrice = totalPrice * (1 - effectiveRate);
-        vatableSales += discountedPrice / (1 + VAT_RATE);
-        const itemVat = discountedPrice - discountedPrice / (1 + VAT_RATE);
-        vatAmount += itemVat;
-      } else if (vatType === "vatable") {
-        vatableSales += totalPrice / VAT_RATE;
-        const itemVat = totalPrice - totalPrice / VAT_RATE;
-        vatAmount += itemVat;
-      } else if (vatType === "vatExempt") {
-        vatExemptSales += totalPrice;
-      } else if (vatType === "zeroVat") {
-        zeroRatedSales += totalPrice / VAT_RATE;
-      }
-    }
-
-    const totalRefundAmount = vatableSales + vatExemptSales + zeroRatedSales;
-
-    data.push({
-      refundKey: key,
-      vatableSales,
-      vatAmount,
-      vatExemptSales,
-      zeroRatedSales,
-      totalRefundAmount,
-    });
-  });
-
-  return data;
-}
+// getRefundSummary/getReturnSummary/getVoidSummary come from utils/bir/refund,
+// which mirrors the device's HelperFunctions/refund.js. A local copy used to
+// live here and shadowed the import: it divided VAT-inclusive prices by 0.12
+// instead of 1.12, dropped Medal of Valor, and returned neither `date`,
+// `transactionKey` nor `refundsByPaymentType` — the fields the Sales Summary
+// per-day filter and calcReadingData's payment-reversal netting rely on.
 
 // Get PAX discount summary from refunded items
 function getPaxDiscountSummary(items: any[] = []): { amount: number; types: string[] } {
@@ -431,7 +312,8 @@ export async function saveTransactions(
       });
     }
 
-    // Generate CSV data
+    // generateTransactionsCsv already appends the TOTAL row and comma-formats
+    // the money columns, mirroring the device's csvs/transactions.
     const data = exportUtils.generateTransactionsCsv(transactions, isManual);
     const timeRange = exportUtils.formatTimeRange(sttS, endS);
     const filename = `${isManual ? "Manual " : ""}Transactions Report ${timeRange.start} to ${timeRange.end}`;
@@ -629,7 +511,10 @@ export async function saveReturnsReport(
 
     const timeRange = exportUtils.formatTimeRange(sttS, endS);
     const filename = `Returns Report ${timeRange.start} to ${timeRange.end}`;
-    const result = await exportUtils.downloadCsvFile(data, filename, {
+    // Totals row last. Label/identifier columns are skipped by header — an
+    // "Items" cell like "Coffee x1" would otherwise parse as 1 and get summed.
+    const dataWithTotals = appendTotalsRow(data, { excludeHeaders: ['Discount Type', 'Items', 'Item Discount Types', 'Names', 'IDs', 'TINs'] });
+    const result = await exportUtils.downloadCsvFile(dataWithTotals, filename, {
       trainingMode: (globalThis as any).isInTrainingMode || false,
     });
     return result;
@@ -770,7 +655,10 @@ export async function saveVoidsReport(
 
     const timeRange = exportUtils.formatTimeRange(sttS, endS);
     const filename = `Voids Report ${timeRange.start} to ${timeRange.end}`;
-    const result = await exportUtils.downloadCsvFile(data, filename, {
+    // Totals row last. Label/identifier columns are skipped by header — an
+    // "Items" cell like "Coffee x1" would otherwise parse as 1 and get summed.
+    const dataWithTotals = appendTotalsRow(data, { excludeHeaders: ['Reason', 'Discount Type', 'Items', 'Item Discount Types', 'Names', 'IDs', 'TINs'] });
+    const result = await exportUtils.downloadCsvFile(dataWithTotals, filename, {
       trainingMode: (globalThis as any).isInTrainingMode || false,
     });
     return result;
@@ -941,7 +829,12 @@ export async function saveRefunds(
     const timeRange = exportUtils.formatTimeRange(sttS, endS);
     const filename = `Refunds Report ${timeRange.start} to ${timeRange.end}`;
 
-    const result = await exportUtils.downloadCsvFile(refundsData, filename, {
+    // Totals row last. Label/identifier columns are skipped by header — an
+    // "Items" cell like "Coffee x1" would otherwise parse as 1 and get summed.
+    const refundsWithTotals = appendTotalsRow(refundsData, {
+      excludeHeaders: ['Discount Type', 'Items', 'Item Discount Types', 'Names', 'IDs', 'TINs'],
+    });
+    const result = await exportUtils.downloadCsvFile(refundsWithTotals, filename, {
       trainingMode: (globalThis as any).isInTrainingMode || false,
     });
 
@@ -1138,9 +1031,12 @@ export async function saveSalesSummary(
       0,
     );
 
-    // Per-date overrun (short/over) and Reset Counter snapshots from Z history.
+    // Per-date overrun (short/over) from Z history. Reset Counter is NOT taken
+    // from here: SalesSummary derives it from the accumulated balance, matching
+    // the Z-reading receipt. The history snapshots recorded the then-current
+    // global BIRresetNo, which for re-downloaded data is uniformly the latest
+    // value rather than the value as of that day.
     const overrunByDate: Record<string, number> = {};
-    const resetNoByDate: Record<string, number> = {};
     Object.values(zReadingHistory || {}).forEach((entry: any) => {
       const yymmdd = entry?.dateRange;
       if (!yymmdd) return;
@@ -1148,7 +1044,6 @@ export async function saveSalesSummary(
         const entryDate = Moment(yymmdd, "YYMMDD").startOf("day").unix();
         if (entryDate >= sttS && entryDate <= endS) overrunByDate[yymmdd] = entry.shortOver;
       }
-      if (entry?.resetNo != null) resetNoByDate[yymmdd] = Number(entry.resetNo);
     });
 
     const data = SalesSummary({
@@ -1159,7 +1054,6 @@ export async function saveSalesSummary(
       voidSummary,
       zCounters,
       overrunByDate,
-      resetNoByDate,
       zReadNo: settings.zReadNo ?? 0,
       consolidate,
     });
@@ -1187,12 +1081,19 @@ export async function saveSalesSummary(
       ["", ""],
     ];
 
+    // Grand Accum. columns are running balances — "Accum." doesn't match the
+    // generic RUNNING_PATTERNS regex (which looks for "accumulated"), so they
+    // need an explicit exclusion or the TOTAL row would sum a running balance.
+    const sheet1WithTotals = appendTotalsRow([SALES_SUMMARY_COLUMNS, ...data.sheet1], {
+      excludeHeaders: ["Grand Accum. Sales Ending Balance", "Grand Accum. Beg. Balance"],
+    }).slice(1);
+
     const workbookData: { [sheetName: string]: any[][] } = {};
     workbookData["SalesSummary"] = [
       headerTitle,
       ...metaRows,
       SALES_SUMMARY_COLUMNS,
-      ...data.sheet1,
+      ...sheet1WithTotals,
     ];
     if (data.sheetBreakdown.length > 1) {
       workbookData["Breakdown"] = data.sheetBreakdown;
@@ -1349,7 +1250,14 @@ export async function generateCustomReading(
   return text;
 }
 
-// Special discounts Excel report - port from mobile specialDiscounts.ts
+/**
+ * Special Discounts ("Discount Report") workbook.
+ *
+ * Fetch + workbook assembly only; every figure comes from
+ * `utils/bir/specialDiscounts.ts`, a verbatim port of the device's
+ * `csvs/specialDiscounts.ts`. Sheets follow the device's Excel template: the
+ * Annex E-1 recap first, then E-2..E-6, with Medal of Valor appended last.
+ */
 export async function saveSpecialDiscounts(
   stt?: string,
   end?: string,
@@ -1369,536 +1277,41 @@ export async function saveSpecialDiscounts(
     const userUid = getCurrentUserUid();
     if (!userUid) throw new Error("User not authenticated");
 
-    // Fetch transactions from Firebase
-    const txnsRef = ref(database, `${userUid}/transactions`);
-    const txnsQuery = query(txnsRef, orderByKey(), startAt(String(sttUnix)), endAt(String(endUnix)));
-    const txnsSnapshot = await get(txnsQuery);
+    // The reversal collections feed sheet1's Returns / Refunds / Voids columns
+    // and the Remarks column on every discount sheet, so all four are fetched.
+    const [txnsSnapshot, refundsSnapshot, returnsSnapshot, voidsSnapshot] =
+      await Promise.all([
+        get(query(ref(database, `${userUid}/transactions`), orderByKey(), startAt(`${sttUnix}`), endAt(`${endUnix - 1}`))),
+        get(query(ref(database, `${userUid}/refunds`), orderByKey(), startAt(`${sttUnix}`), endAt(`${endUnix - 1}`))),
+        get(query(ref(database, `${userUid}/returns`), orderByKey(), startAt(`${sttUnix}`), endAt(`${endUnix - 1}`))),
+        get(query(ref(database, `${userUid}/voids`), orderByKey(), startAt(`${sttUnix}`), endAt(`${endUnix - 1}`))),
+      ]);
 
-    const seniorData: Record<string, any[]> = {};
-    const pwdData: Record<string, any[]> = {};
-    const ntlAthleteData: Record<string, any[]> = {};
-    const soloParentData: Record<string, any[]> = {};
-    const diplomatData: Record<string, any[]> = {};
+    // Start of the range's month: splits each transaction's total into
+    // current-month and prior-month buckets, as on the device.
+    const month = Moment.unix(sttUnix).startOf("month").format("X");
 
-    const VAT_RATE = 0.12;
+    const data = await specialDiscounts({
+      snapshot: txnsSnapshot,
+      month,
+      refundsSnapshot,
+      returnsSnapshot,
+      voidsSnapshot,
+    });
 
-    // Process transactions snapshot per transaction
-    if (txnsSnapshot.exists()) {
-      txnsSnapshot.forEach((snap: any) => {
-        const key = snap.key;
-        const val = snap.val();
-        const $txn = new Transaction({ key, val });
-
-        const names = $txn.original?.seniorAndPwdMetadata?.names?.split(/\n+/) || [];
-        const ids = $txn.original?.seniorAndPwdMetadata?.ids?.split(/\n+/) || [];
-        const tins = $txn.original?.seniorAndPwdMetadata?.tins?.split(/\n+/) || [];
-
-        // PAX discount: stored on first item, not on transaction root
-        const paxDiscount = (() => {
-          const items = $txn.original?.items;
-          if (!items) return null;
-          const arr = Array.isArray(items) ? items : Object.values(items);
-          const firstWithPax = arr.find((i: any) => i?.paxDiscount);
-          return firstWithPax?.paxDiscount ?? null;
-        })();
-
-        // Calculate total service fee for transaction to allocate proportionally
-        let totalGrossAfterDisc = 0;
-        for (const $itm of $txn.items) {
-          if (!$itm) continue;
-          const qtyPrice = ($itm.quantity || 0) * ($itm.price || 0);
-          const lineGross = $itm.vatType === 'vatable' ? qtyPrice / (1 + VAT_RATE) : qtyPrice;
-          const discAmt = ($itm.itmDiscount || 0) + ($itm.txnDiscount || 0);
-          totalGrossAfterDisc += lineGross - discAmt;
-        }
-        const svcRate = ($txn.original?.service || $txn.svcRate || 0) / (typeof ($txn.original?.service) === 'number' && ($txn.original?.service) > 1 ? 100 : 1);
-        const totalServiceFee = totalGrossAfterDisc * svcRate;
-
-        // Non-PAX aggregation per discount type
-        const nonPaxTypeAgg: Record<string, any> = {
-          senior: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
-          pwd: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
-          ntlAthlete: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
-          soloParent: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
-          diplomat: { vatable: 0, vat: 0, vatExempt: 0, discount: 0, netSales: 0, grossSales: 0, vatExcluded: 0, grossAfterDisc: 0 },
-        };
-
-        // Aggregate per discount type from items
-        for (const $itm of $txn.items) {
-          if (!$itm) continue;
-
-          const itmSpecial = $itm.itmDiscType && $itm.itmDiscType !== 'regular' ? $itm.itmDiscType : null;
-          const txnSpecial = $itm.txnDiscType && $itm.txnDiscType !== 'regular' ? $itm.txnDiscType : null;
-          const perItemTypeDiscount: Record<string, number> = {};
-
-          if (itmSpecial) {
-            perItemTypeDiscount[itmSpecial] = (perItemTypeDiscount[itmSpecial] || 0) + ($itm.itmDiscount || 0);
-          }
-          if (txnSpecial) {
-            perItemTypeDiscount[txnSpecial] = (perItemTypeDiscount[txnSpecial] || 0) + ($itm.txnDiscount || 0);
-          }
-
-          for (const [discType, discAmtRaw] of Object.entries(perItemTypeDiscount)) {
-            if (!nonPaxTypeAgg[discType]) continue;
-
-            const discAmt = discAmtRaw || 0;
-            const qtyPrice = ($itm.quantity || 0) * ($itm.price || 0);
-            const lineGross = $itm.vatType === 'vatable' ? qtyPrice / (1 + VAT_RATE) : qtyPrice;
-            const lineGrossAfterDisc = lineGross - discAmt;
-            const allocatedServiceFee = totalGrossAfterDisc > 0 ? (lineGrossAfterDisc / totalGrossAfterDisc) * totalServiceFee : 0;
-            const lineNet = lineGrossAfterDisc + allocatedServiceFee;
-
-            if (discType !== 'diplomat' && discAmt <= 0) continue;
-            if (discType === 'diplomat' && lineGross <= 0 && discAmt <= 0) continue;
-
-            const agg = nonPaxTypeAgg[discType];
-            agg.discount += discAmt;
-            agg.netSales += lineNet;
-            agg.grossSales += lineGross;
-            agg.grossAfterDisc += lineGrossAfterDisc;
-
-            if ($itm.vatType === 'vatExempt') {
-              agg.vatExempt += lineGross / (1 + VAT_RATE);
-            } else if ($itm.vatType === 'zeroVat' || discType === 'diplomat') {
-              const vatExcluded = $itm.vatExemption || ($itm.vatType === 'zeroVat' ? (lineGross / 1.12) * 0.12 : 0);
-              agg.vatExcluded += vatExcluded;
-            } else {
-              const vatable = (lineGross - discAmt) / 1.12;
-              agg.vatable += vatable;
-              agg.vat += vatable * 0.12;
-            }
-          }
-        }
-
-        if (paxDiscount) {
-          // PAX: use _parts from items
-          type PartAgg = { grossSales: number; discount: number; netSales: number; vatable: number; vat: number; vatExempt: number; vatExemption: number };
-          const typeAgg: Record<string, PartAgg> = {};
-
-          for (const $itm of $txn.items) {
-            if (!$itm?._parts?.values) continue;
-            for (const [partDiscType, part] of Object.entries($itm._parts.values) as [string, any][]) {
-              if (!['senior', 'pwd', 'ntl', 'sp', 'diplomat'].includes(partDiscType)) continue;
-              if (!typeAgg[partDiscType]) {
-                typeAgg[partDiscType] = { grossSales: 0, discount: 0, netSales: 0, vatable: 0, vat: 0, vatExempt: 0, vatExemption: 0 };
-              }
-              typeAgg[partDiscType].grossSales += part.grossSales || 0;
-              typeAgg[partDiscType].discount += part.discount || 0;
-              typeAgg[partDiscType].netSales += part.netSales || 0;
-              typeAgg[partDiscType].vatExemption += part.vatExemption || 0;
-              if (part.vatType === 'vatable') {
-                typeAgg[partDiscType].vatable += part.discType === 'ntl' ? (part.grossSales || 0) : (part.netSales || 0);
-                typeAgg[partDiscType].vat += part.vat || 0;
-              } else if (part.vatType === 'vatExempt') {
-                typeAgg[partDiscType].vatExempt += part.grossSales || 0;
-              }
-            }
-          }
-
-          for (const [discType, discObj] of Object.entries(paxDiscount)) {
-            const typedDiscObj = discObj as any;
-            if (!typedDiscObj.guestCount) continue;
-            if (discType !== 'diplomat' && !typedDiscObj.percent) continue;
-
-            const agg = typeAgg[discType];
-            if (!agg) continue;
-            if (discType === 'diplomat') {
-              if (agg.grossSales <= 0 && agg.netSales <= 0) continue;
-            } else if (agg.discount <= 0 && agg.grossSales <= 0) {
-              continue;
-            }
-
-            const blockNames = (typedDiscObj.names || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean);
-            const blockIds = (typedDiscObj.ids || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean);
-            const blockTins = (typedDiscObj.tins || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean);
-            const blockChildNames = discType === 'sp' ? (typedDiscObj.childNames || typedDiscObj.childName || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean) : [] as string[];
-            const blockChildBirthDates = discType === 'sp' ? (typedDiscObj.childBirthDates || typedDiscObj.childBirthDate || '').split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean) : [] as string[];
-            const blockChildAges = discType === 'sp' ? (typedDiscObj.childAges || (typedDiscObj.childAge != null ? String(typedDiscObj.childAge) : '')).split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean) : [] as string[];
-            const guestCountForType = parseInt(typedDiscObj.guestCount, 10) || 1;
-            const n = discType === 'sp'
-              ? Math.max(blockNames.length, blockIds.length, blockTins.length, blockChildNames.length, guestCountForType) || 1
-              : Math.max(blockNames.length, blockIds.length, blockTins.length, guestCountForType) || 1;
-
-            const grossPerRow = agg.grossSales / n;
-            const discountPerRow = agg.discount / n;
-            const netPerRow = agg.netSales / n;
-            const vatablePerRow = agg.vatable / n;
-            const vatPerRow = agg.vat / n;
-            const vatExemptPerRow = agg.vatExempt / n;
-
-            const typeLabels: Record<string, string> = {
-              senior: 'Senior Citizen (No ID)',
-              pwd: 'PWD (No ID)',
-              ntl: 'NAAC (No ID)',
-              sp: 'Solo Parent (No ID)',
-              diplomat: 'Diplomat (No ID)',
-            };
-            const defaultLabel = typeLabels[discType] || 'Guest';
-
-            for (let i = 0; i < n; i++) {
-              const name = blockNames[i] || blockIds[i] || (n > 1 ? `${defaultLabel} ${i + 1}` : defaultLabel);
-
-              if (discType === 'senior') {
-                if (!seniorData[name]) seniorData[name] = [];
-                seniorData[name].push({
-                  id: blockIds[i] || '',
-                  tin: blockTins[i] || '',
-                  date: $txn.key,
-                  receiptCycle: $txn.original?.receiptCycle ?? 0,
-                  receiptNo: $txn.original?.receiptNo || '',
-                  vatable: vatablePerRow,
-                  vat: vatPerRow,
-                  vatExempt: vatExemptPerRow,
-                  discount: discountPerRow,
-                  netSales: netPerRow,
-                });
-              } else if (discType === 'pwd') {
-                if (!pwdData[name]) pwdData[name] = [];
-                pwdData[name].push({
-                  id: blockIds[i] || '',
-                  tin: blockTins[i] || '',
-                  date: $txn.key,
-                  receiptCycle: $txn.original?.receiptCycle ?? 0,
-                  receiptNo: $txn.original?.receiptNo || '',
-                  vatable: vatablePerRow,
-                  vat: vatPerRow,
-                  vatExempt: vatExemptPerRow,
-                  discount: discountPerRow,
-                  netSales: netPerRow,
-                });
-              } else if (discType === 'ntl') {
-                if (!ntlAthleteData[name]) ntlAthleteData[name] = [];
-                const naacNetSales = TransactionItem.round(grossPerRow - discountPerRow);
-                ntlAthleteData[name].push({
-                  id: blockIds[i] || '',
-                  date: $txn.key,
-                  receiptCycle: $txn.original?.receiptCycle ?? 0,
-                  receiptNo: $txn.original?.receiptNo || '',
-                  discount: discountPerRow,
-                  grossSales: grossPerRow,
-                  netSales: naacNetSales,
-                });
-              } else if (discType === 'sp') {
-                if (!soloParentData[name]) soloParentData[name] = [];
-                const soloMeta = $txn.original?.soloParentMetadata || $txn.original?.soloParentDetails;
-                const childName = blockChildNames[i] || typedDiscObj.childName || soloMeta?.childName || '';
-                const childBirthDate = blockChildBirthDates[i] || typedDiscObj.childBirthDate || soloMeta?.childBirthDate || '';
-                const childAge = blockChildAges[i] != null && blockChildAges[i] !== '' ? blockChildAges[i] : (typedDiscObj.childAge ?? soloMeta?.childAge ?? '');
-                const soloBaseAfterDiscount = grossPerRow - discountPerRow;
-                const soloServiceFee = soloBaseAfterDiscount * svcRate;
-                const soloNetSales = TransactionItem.round(soloBaseAfterDiscount + soloServiceFee);
-                soloParentData[name].push({
-                  id: blockIds[i] || '',
-                  date: $txn.key,
-                  receiptCycle: $txn.original?.receiptCycle ?? 0,
-                  receiptNo: $txn.original?.receiptNo || '',
-                  discount: discountPerRow,
-                  grossSales: grossPerRow,
-                  netSales: soloNetSales,
-                  childName,
-                  childBirthDate,
-                  childAge,
-                });
-              } else if (discType === 'diplomat') {
-                if (!diplomatData[name]) diplomatData[name] = [];
-                const vatExemptPerRow = (agg.vatExemption || 0) / n;
-                diplomatData[name].push({
-                  id: blockIds[i] || '',
-                  tin: blockTins[i] || '',
-                  date: $txn.key,
-                  receiptCycle: $txn.original?.receiptCycle ?? 0,
-                  receiptNo: $txn.original?.receiptNo || '',
-                  grossSales: grossPerRow,
-                  vatExcluded: vatExemptPerRow,
-                  netSales: netPerRow,
-                });
-              }
-            }
-          }
-        } else {
-          // Non-PAX: use seniorAndPwdMetadata names for discounts
-          for (let n = 0; n < names.length; n++) {
-            const name = names[n];
-            if (!name) continue;
-
-            // Senior discount
-            const agg_senior = nonPaxTypeAgg.senior;
-            if (agg_senior.discount > 0) {
-              if (!seniorData[name]) seniorData[name] = [];
-              seniorData[name].push({
-                id: ids[n] || '',
-                tin: tins[n] || '',
-                date: $txn.key,
-                receiptCycle: $txn.original?.receiptCycle ?? 0,
-                receiptNo: $txn.original?.receiptNo || '',
-                vatable: agg_senior.vatable,
-                vat: agg_senior.vat,
-                vatExempt: agg_senior.vatExempt,
-                discount: agg_senior.discount,
-                netSales: agg_senior.netSales,
-              });
-            }
-
-            // PWD discount
-            const agg_pwd = nonPaxTypeAgg.pwd;
-            if (agg_pwd.discount > 0) {
-              if (!pwdData[name]) pwdData[name] = [];
-              pwdData[name].push({
-                id: ids[n] || '',
-                tin: tins[n] || '',
-                date: $txn.key,
-                receiptCycle: $txn.original?.receiptCycle ?? 0,
-                receiptNo: $txn.original?.receiptNo || '',
-                vatable: agg_pwd.vatable,
-                vat: agg_pwd.vat,
-                vatExempt: agg_pwd.vatExempt,
-                discount: agg_pwd.discount,
-                netSales: agg_pwd.netSales,
-              });
-            }
-
-            // NAAC discount
-            const agg_ntl = nonPaxTypeAgg.ntlAthlete;
-            if (agg_ntl.discount > 0) {
-              if (!ntlAthleteData[name]) ntlAthleteData[name] = [];
-              const ntlGross = agg_ntl.grossSales || 0;
-              ntlAthleteData[name].push({
-                id: ids[n] || '',
-                date: $txn.key,
-                receiptCycle: $txn.original?.receiptCycle ?? 0,
-                receiptNo: $txn.original?.receiptNo || '',
-                discount: agg_ntl.discount,
-                grossSales: ntlGross,
-                netSales: agg_ntl.netSales,
-              });
-            }
-
-            // Solo Parent discount
-            const agg_solo = nonPaxTypeAgg.soloParent;
-            if (agg_solo.discount > 0) {
-              if (!soloParentData[name]) soloParentData[name] = [];
-              const soloMeta = $txn.original?.soloParentMetadata || $txn.original?.soloParentDetails;
-              soloParentData[name].push({
-                id: ids[n] || '',
-                date: $txn.key,
-                receiptCycle: $txn.original?.receiptCycle ?? 0,
-                receiptNo: $txn.original?.receiptNo || '',
-                discount: agg_solo.discount,
-                grossSales: agg_solo.grossSales,
-                netSales: agg_solo.netSales,
-                childName: soloMeta?.childName || '',
-                childBirthDate: soloMeta?.childBirthDate || '',
-                childAge: soloMeta?.childAge ?? '',
-              });
-            }
-
-            // Diplomat discount
-            const agg_diplomat = nonPaxTypeAgg.diplomat;
-            if (agg_diplomat.grossSales > 0 || agg_diplomat.vatExcluded > 0) {
-              if (!diplomatData[name]) diplomatData[name] = [];
-              diplomatData[name].push({
-                id: ids[n] || '',
-                tin: tins[n] || '',
-                date: $txn.key,
-                receiptCycle: $txn.original?.receiptCycle ?? 0,
-                receiptNo: $txn.original?.receiptNo || '',
-                grossSales: agg_diplomat.grossSales,
-                vatExcluded: agg_diplomat.vatExcluded || 0,
-                netSales: agg_diplomat.netSales,
-              });
-            }
-          }
-        }
-      });
-    }
-
-    const workbookData: { [sheetName: string]: any[][] } = {};
-    const normalize = (val: any) => {
-      if (typeof val === 'string') {
-        return val.replace(/[,;:\t]/g, '');
-      } else if (typeof val === 'number' && !isNaN(val)) {
-        return parseFloat(val.toFixed(2));
-      }
-      return 0;
+    // The device writes a TOTAL row under Senior Citizen, PWD and NAAC only —
+    // Solo Parent, Diplomat, Medal of Valor and the E-1 recap get none
+    // (saveSpecialDiscounts.js:170-193). Mirrored rather than "fixed": the
+    // device is the accredited output.
+    const workbookData: { [sheetName: string]: any[][] } = {
+      BIRSalesSummary: data.sheet1,
+      SeniorCitizen: appendTotalsRow(data.sheet2),
+      PWD: appendTotalsRow(data.sheet3),
+      NAAC: appendTotalsRow(data.sheet4),
+      SoloParent: data.sheet5,
+      Diplomat: data.sheet6,
+      MedalOfValor: data.sheet7,
     };
-    const round = (n: number) => TransactionItem.round(n);
-    const formatReceiptNo = (cycle: number, no: string | number): string => {
-      if (no === '' || no === undefined || no === null) return '';
-      const cycleNum = Math.max(0, parseInt(String(cycle ?? 0), 10) || 0);
-      const noNum = Math.max(0, parseInt(String(no), 10) || 0);
-      const c = String(cycleNum).padStart(2, '0');
-      const n6 = String(noNum).padStart(6, '0');
-      return `${c}-${n6}`;
-    };
-
-    // Senior Citizens sheet (Annex E-2)
-    workbookData["SeniorCitizen"] = [
-      [
-        'Date',
-        'Name of Senior Citizen (SC)',
-        'OSCA ID No./SC ID No.',
-        'SC TIN',
-        'SI/OR Number',
-        'Sales (inclusive of VAT)',
-        'VAT Amount',
-        'VAT Exempt Sales',
-        'Discount (5%)',
-        'Discount (20%)',
-        'Net Sales',
-      ],
-    ];
-    Object.entries(seniorData).forEach(([name, rows]) => {
-      rows.forEach((row) => {
-        const vatExempt = row.vatExempt || 0;
-        const salesInclVat = vatExempt * (1 + VAT_RATE);
-        const vatAmount = 0;
-        workbookData["SeniorCitizen"].push([
-          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
-          normalize(name),
-          normalize(row.id),
-          normalize(row.tin?.length > 0 ? row.tin : 'N/A'),
-          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
-          normalize(round(salesInclVat) / MP),
-          normalize(round(vatAmount) / MP),
-          normalize(round(vatExempt) / MP),
-          normalize(0),
-          normalize(round(row.discount) / MP),
-          normalize(round(row.netSales) / MP),
-        ]);
-      });
-    });
-
-    // PWD sheet (Annex E-3)
-    workbookData["PWD"] = [
-      [
-        'Date',
-        'Name of Person with Disability (PWD)',
-        'PWD ID No.',
-        'PWD TIN',
-        'SI/OR Number',
-        'Sales (inclusive of VAT)',
-        'VAT Amount',
-        'VAT Exempt Sales',
-        'Discount (5%)',
-        'Discount (20%)',
-        'Net Sales',
-      ],
-    ];
-    Object.entries(pwdData).forEach(([name, rows]) => {
-      rows.forEach((row) => {
-        const vatExempt = row.vatExempt || 0;
-        const salesInclVat = vatExempt * (1 + VAT_RATE);
-        const vatAmount = 0;
-        workbookData["PWD"].push([
-          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
-          normalize(name),
-          normalize(row.id),
-          normalize(row.tin?.length > 0 ? row.tin : 'N/A'),
-          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
-          normalize(round(salesInclVat) / MP),
-          normalize(round(vatAmount) / MP),
-          normalize(round(vatExempt) / MP),
-          normalize(0),
-          normalize(round(row.discount) / MP),
-          normalize(round(row.netSales) / MP),
-        ]);
-      });
-    });
-
-    // NAAC sheet (Annex E-4)
-    workbookData["NAAC"] = [
-      [
-        'Date',
-        'Name of National Athlete/Coach',
-        'PNSTM ID No.',
-        'SI / OR Number',
-        'Gross Sales/Receipts',
-        'Sales Discount',
-        'Net Sales',
-      ],
-    ];
-    Object.entries(ntlAthleteData).forEach(([name, rows]) => {
-      rows.forEach((row) => {
-        const grossSales = row.grossSales || 0;
-        const netSales = row.netSales != null ? row.netSales : (grossSales - (row.discount || 0));
-        workbookData["NAAC"].push([
-          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
-          normalize(name),
-          normalize(row.id),
-          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
-          normalize(round(grossSales) / MP),
-          normalize(round(row.discount) / MP),
-          normalize(round(netSales) / MP),
-        ]);
-      });
-    });
-
-    // Solo Parent sheet (Annex E-5)
-    workbookData["SoloParent"] = [
-      [
-        'Date',
-        'Name of Solo Parent',
-        'SPIC No.',
-        'Name of child',
-        'Birth Date of child',
-        'Age of child',
-        'SI / OR Number',
-        'Gross Sales',
-        'Discount (5%)',
-        'Discount (20%)',
-        'Net Sales',
-      ],
-    ];
-    Object.entries(soloParentData).forEach(([name, rows]) => {
-      rows.forEach((row) => {
-        const grossSales = row.grossSales || 0;
-        const netSales = row.netSales != null ? row.netSales : (grossSales - (row.discount || 0));
-        workbookData["SoloParent"].push([
-          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
-          normalize(name),
-          normalize(row.id),
-          normalize(row.childName || ''),
-          normalize(row.childBirthDate ? Moment(row.childBirthDate).format('D MMM YYYY') : ''),
-          normalize(row.childAge?.toString() || ''),
-          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
-          normalize(round(grossSales) / MP),
-          normalize(0),
-          normalize(round(row.discount) / MP),
-          normalize(round(netSales) / MP),
-        ]);
-      });
-    });
-
-    // Diplomat sheet (Annex E-6)
-    workbookData["Diplomat"] = [
-      [
-        'Date',
-        'Name of Diplomat',
-        'Diplomatic ID No.',
-        'TIN',
-        'SI/OR Number',
-        'Gross Sales (VAT-inclusive)',
-        'VAT Excluded (Zero-Rated)',
-        'Net Sales (VAT-exclusive)',
-      ],
-    ];
-    Object.entries(diplomatData).forEach(([name, rows]) => {
-      rows.forEach((row) => {
-        const grossSales = row.grossSales || 0;
-        const vatExcluded = row.vatExcluded || 0;
-        const netSales = row.netSales != null ? row.netSales : (grossSales - vatExcluded);
-        workbookData["Diplomat"].push([
-          normalize(Moment(row.date, 'X').format('D MMM YYYY')),
-          normalize(name),
-          normalize(row.id || ''),
-          normalize(row.tin?.length > 0 ? row.tin : 'N/A'),
-          normalize(formatReceiptNo(row.receiptCycle ?? 0, row.receiptNo ?? '')),
-          normalize(round(grossSales) / MP),
-          normalize(round(vatExcluded) / MP),
-          normalize(round(netSales) / MP),
-        ]);
-      });
-    });
 
     const filename = `Discount Report ${timeRange.start} to ${timeRange.end}`;
     const result = await exportUtils.downloadExcelFile(workbookData, filename, {
@@ -1944,40 +1357,12 @@ export async function saveProductMix(
     const txnsQuery = query(txnsRef, orderByKey(), startAt(String(sttUnix)), endAt(String(endUnix)));
     const txnsSnapshot = await get(txnsQuery);
 
-    const mix = new Map<string, { item: string; option: string; category: string; quantity: number; sales: number }>();
-    if (txnsSnapshot.exists()) {
-      txnsSnapshot.forEach((snap: any) => {
-        const txn = snap.val();
-        if (!txn || txn.trainingMode || !Array.isArray(txn.items)) return;
-        for (const item of txn.items) {
-          if (!item) continue;
-          const qty = Number(item.quantity) || 0;
-          if (qty <= 0) continue; // skip adjustment clones / non-sold rows
-          if (item.refunded || item.returned || item.voided || item.refund != null || item.return != null) continue;
-          const title = item.title || "(unnamed)";
-          const option = item.option || "";
-          const category = item.categoryOriginal || item.category || "";
-          const key = `${title}|${option}`;
-          const sales = qty * (Number(item.price) || 0);
-          const cur = mix.get(key) || { item: title, option, category, quantity: 0, sales: 0 };
-          cur.quantity += qty;
-          cur.sales += sales;
-          mix.set(key, cur);
-        }
-      });
-    }
-
-    const sorted = [...mix.values()].sort((a, b) => b.sales - a.sales);
-    const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+    const { rows: sorted, totalQty, totalSales } = aggregateProductMixFromSnapshot(txnsSnapshot);
     const sheetRows: any[][] = [["Item", "Option", "Category", "Quantity Sold", "Gross Sales"]];
-    let totalQty = 0;
-    let totalSales = 0;
     for (const r of sorted) {
-      sheetRows.push([r.item, r.option, r.category, r.quantity, round2(r.sales)]);
-      totalQty += r.quantity;
-      totalSales += r.sales;
+      sheetRows.push([r.item, r.option, r.category, r.quantity, r.sales]);
     }
-    sheetRows.push(["TOTAL", "", "", totalQty, round2(totalSales)]);
+    sheetRows.push(["TOTAL", "", "", totalQty, totalSales]);
 
     const settings = await exportUtils.getUserSettings();
     const workbookData: { [sheetName: string]: any[][] } = {
