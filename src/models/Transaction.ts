@@ -1,7 +1,15 @@
 // TypeScript port of mobile Transaction.js — keep in sync with utakmobileBIR
 import TransactionItem, { TransactionItemValue } from './TransactionItem';
+import { roundMoney } from '../utils/bir/money';
 
-const roundableItemProps = ['$amountDue', '__itmTotal'] as const;
+const roundableItemProps = [
+  '$amountDue', '__itmTotal',
+  '$baseSales', '$grossSales', '$itmDiscount', '$txnDiscount', '$discount',
+  '$service', '$subtotal', '$netSales', '$total', '$vat', '$vatableSales',
+  '$vatExemptSales', '$zeroRatedSales',
+  'itmDiscount', 'vatExemption', 'txnDiscount', 'totalCost',
+  '__txnVatExemption',
+] as const;
 
 const summableItemProps = [
   '$baseSales', '$grossSales', '$itmDiscount', '$txnDiscount', '$discount',
@@ -9,7 +17,7 @@ const summableItemProps = [
   '$vatExemptSales', '$zeroRatedSales',
   'itmDiscount', 'vatExemption', 'txnDiscount', 'quantity', 'totalCost',
   '__txnVatExemption',
-  ...roundableItemProps,
+  '$amountDue', '__itmTotal',
 ] as const;
 
 export interface TransactionValue {
@@ -44,6 +52,19 @@ class Transaction {
     const refundKey = (val as any).originalRefundKey != null ? String((val as any).originalRefundKey) : String(key);
     for (const $itm of $txn.items) {
       if ($itm && $itm.quantity <= 0 && String($itm.original.refund) === refundKey) {
+        $itms.push($itm);
+      }
+    }
+    $txn.items = $itms;
+    return $txn;
+  }
+
+  static asReturnAdjustment({ val, key = null, ...opts }: { val: TransactionValue; key?: number | string | null; [k: string]: any }): Transaction {
+    const $txn = new Transaction({ val, key, ...opts });
+    const $itms: (TransactionItem | null)[] = [];
+    const returnKey = String(key);
+    for (const $itm of $txn.items) {
+      if ($itm && $itm.quantity <= 0 && String($itm.original.return) === returnKey) {
         $itms.push($itm);
       }
     }
@@ -116,7 +137,7 @@ class Transaction {
     this.items = items;
 
     if ('total' in val) {
-      this.total = TransactionItem.round(TransactionItem.moneyOrZero(val.total));
+      this.total = roundMoney(TransactionItem.moneyOrZero(val.total));
     }
     if ('totalCost' in val) {
       this.totalCost = TransactionItem.moneyOrZero(val.totalCost as any);
@@ -124,7 +145,7 @@ class Transaction {
 
     this.payments = Object.entries(val.payments || {}).map(([k, v]) => ({
       type: k,
-      value: this.total && TransactionItem.round(TransactionItem.moneyOrZero(v)),
+      value: this.total && roundMoney(TransactionItem.moneyOrZero(v)),
     }));
   }
 
@@ -165,14 +186,23 @@ class Transaction {
       this.txnDiscRate = item.txnDiscRate;
       this._defaultVatType = item._defaultVatType;
     }
-    for (const k of roundableItemProps) (this as any)[k] = TransactionItem.round((this as any)[k]);
+    for (const k of roundableItemProps) (this as any)[k] = roundMoney((this as any)[k]);
+    this._items = v;
 
-    if (v.find(Boolean)?._parts) {
-      this.$amountDue = TransactionItem.round(this.$baseSales - this.discount + this.$service);
+    // NAAC amount due is driven off base sales rather than the per-item
+    // netSales + VAT sum (mirrors mobile Transaction.js). Mobile also carries a
+    // `v[0]?.paxDiscount` branch ahead of this one, but TransactionItem never
+    // exposes `paxDiscount` (it lives under `.original`), so that branch is
+    // inert on the device: a PAX transaction falls through to `$amountDue`,
+    // which already sums each item's rounded `_parts.total`. Reproducing the
+    // branch here would make web disagree with the device, so it is omitted.
+    const hasNaac =
+      this.txnDiscType === 'ntlAthlete' ||
+      v.some(item => item?.itmDiscType === 'ntlAthlete');
+    if (hasNaac) {
+      this.$amountDue = roundMoney(roundMoney(this.$baseSales - this.discount) + this.$service);
     }
     this.total = this.$amountDue;
-
-    this._items = v;
     this._total = this.total;
     this._totalCost = this.totalCost;
   }
@@ -182,15 +212,14 @@ class Transaction {
   }
 
   get discount(): number {
-    const firstItem = this._items?.find(Boolean);
-    if (firstItem?._parts) {
-      return this._items.reduce((a, item) => a + (item?._parts?.discount ?? 0), 0);
+    if (this._items?.[0]?._parts) {
+      return roundMoney(this._items.reduce((a, item) => a + (item?._parts?.discount ?? 0), 0));
     }
     return this.itmDiscount + this.txnDiscount;
   }
 
   get __txnEffDisc(): number {
-    return TransactionItem.round(this.__txnVatExemption + this.txnDiscount);
+    return roundMoney(this.__txnVatExemption + this.txnDiscount);
   }
 
   get service(): number {
@@ -210,7 +239,7 @@ class Transaction {
   }
 
   get paymentReceived(): number {
-    return TransactionItem.round(
+    return roundMoney(
       TransactionItem.MONEY_PRECISION * (this.original.paymentReceived || 0) || this.total || 0
     );
   }

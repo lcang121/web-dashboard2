@@ -3,6 +3,7 @@ import Moment from 'moment-timezone';
 
 import { getTransactionSummary } from './transaction';
 import { calcReadingData } from './calcReadingData';
+import { appendTotalsRow } from './format';
 
 const VAT_RATE = 0.12;
 const SENIOR_RATE = 0.2;
@@ -94,16 +95,18 @@ export const SalesSummary = ({
     else if (txn.vatExemptSales > 0) type = 'VAT Exempt';
     else if (txn.zeroRatedSales > 0) type = 'VAT Zero-Rated';
     sheetBreakdown.push([
-      txn.date,
+      Moment(txn.date, 'YYYY-MM-DD').format('MM/DD/YYYY'),
       formatReceiptNoWithCycle(txn.receiptCycle, txn.receiptNo),
       type,
-      (
+      // normalizeNumber (not toFixed) so the report can apply the 0,000.00 cell
+      // format; XLSX still stores the full-precision value.
+      normalizeNumber(
         txn.grossSales ??
-        ((txn.vatableSales || 0) + (txn.vatAmount || 0) + (txn.vatExemptSales || 0) + ((txn.zeroRatedSales || 0) * (1 + VAT_RATE)))
-      ).toFixed(2),
-      txn.vatAmount.toFixed(2),
+          ((txn.vatableSales || 0) + (txn.vatAmount || 0) + (txn.vatExemptSales || 0) + ((txn.zeroRatedSales || 0) * (1 + VAT_RATE))),
+      ),
+      normalizeNumber(txn.vatAmount || 0),
       (txn.deductions?.discount?.sc || 0) + (txn.deductions?.discount?.pwd || 0) + (txn.deductions?.discount?.naac || 0) +
-        (txn.deductions?.discount?.soloParent || 0) + ((txn.deductions?.discount as any)?.medalOfValor || 0) + (txn.deductions?.discount?.others || 0),
+        (txn.deductions?.discount?.soloParent || 0) + (txn.deductions?.discount?.others || 0),
       Object.keys(txn.paymentTypeTotals || {}).join(', '),
     ]);
   }
@@ -135,7 +138,26 @@ export const SalesSummary = ({
       (r) => Moment.unix(parseInt(String(r.key || 0), 10)).format('YYYY-MM-DD') === date,
     );
     if (filtered.length === 0) {
-      return { ...rs, returns: [], totalReturnAmount: 0, returnBaseAmount: 0, returnNetAmount: 0, zeroRatedReturnVatAdj: 0, vatOnReturns: 0 };
+      return {
+        ...rs,
+        returns: [],
+        totalReturnAmount: 0,
+        returnBaseAmount: 0,
+        returnNetAmount: 0,
+        count: 0,
+        totalScReturnDiscount: 0,
+        totalPwdReturnDiscount: 0,
+        totalMovReturnDiscount: 0,
+        totalReturnVatExemptSales: 0,
+        cashReturnAmount: 0,
+        cashReturnNetAmount: 0,
+        scReturnVatAdj: 0,
+        pwdReturnVatAdj: 0,
+        movReturnVatAdj: 0,
+        regDiscReturnVatAdj: 0,
+        zeroRatedReturnVatAdj: 0,
+        vatOnReturns: 0,
+      };
     }
     const returnBaseAmount = filtered.reduce(
       (s, r) => s + (r.vatableSales || 0) + (r.vatExemptSales || 0) + (r.zeroRatedSales || 0), 0);
@@ -144,6 +166,17 @@ export const SalesSummary = ({
       const base = Math.abs((r.vatableSales || 0) + (r.vatExemptSales || 0) + (r.zeroRatedSales || 0));
       return s + (base - (r.scReturnDiscount || 0) - (r.pwdReturnDiscount || 0) - (r.movReturnDiscount || 0));
     }, 0);
+    const totalScReturnDiscount = filtered.reduce((s, r) => s + (r.scReturnDiscount || 0), 0);
+    const totalPwdReturnDiscount = filtered.reduce((s, r) => s + (r.pwdReturnDiscount || 0), 0);
+    const totalMovReturnDiscount = filtered.reduce((s, r) => s + (r.movReturnDiscount || 0), 0);
+    const totalReturnVatExemptSales = filtered.reduce((s, r) => s + Math.abs(r.vatExemptSales || 0), 0);
+    const cashReturns = filtered.filter((r) => r.paymentType === 'Cash');
+    const cashReturnAmount = cashReturns.reduce((s, r) => s + (r.returnAmount || 0), 0);
+    const cashReturnNetAmount = cashReturns.reduce((s, r) => {
+      const base = Math.abs((r.vatableSales || 0) + (r.vatExemptSales || 0) + (r.zeroRatedSales || 0));
+      return s + (base - (r.scReturnDiscount || 0) - (r.pwdReturnDiscount || 0) - (r.movReturnDiscount || 0));
+    }, 0);
+    const regDiscReturnVatAdj = filtered.reduce((s, r) => s + (r.regDiscReturnVat || 0), 0);
     const zeroRatedReturnVatAdj = filtered.reduce((s, r) => s + (r.zeroRatedReturnBase || 0), 0) * VAT_RATE;
     const vatOnReturns = filtered.reduce((s, r) => s + (r.vatAmount || 0), 0);
     return {
@@ -152,6 +185,17 @@ export const SalesSummary = ({
       totalReturnAmount,
       returnBaseAmount,
       returnNetAmount: Math.max(0, returnNetAmount),
+      count: filtered.length,
+      totalScReturnDiscount,
+      totalPwdReturnDiscount,
+      totalMovReturnDiscount,
+      totalReturnVatExemptSales,
+      cashReturnAmount,
+      cashReturnNetAmount,
+      scReturnVatAdj: totalScReturnDiscount * (VAT_RATE / SENIOR_RATE),
+      pwdReturnVatAdj: totalPwdReturnDiscount * (VAT_RATE / PWD_RATE),
+      movReturnVatAdj: totalMovReturnDiscount * (VAT_RATE / MEDAL_OF_VALOR_RATE),
+      regDiscReturnVatAdj,
       zeroRatedReturnVatAdj,
       vatOnReturns,
     };
@@ -185,6 +229,40 @@ export const SalesSummary = ({
         i.grossSales ??
         ((i.vatableSales || 0) + (i.vatAmount || 0) + (i.vatExemptSales || 0) + ((i.zeroRatedSales || 0) * (1 + VAT_RATE))),
     );
+
+    // Remarks tokens for the day (comma-separated). A bare "MANUAL SI" flag said
+    // a manual receipt had been issued but not WHICH one, so the number had to be
+    // looked up by hand. Emit one token per manual receipt naming both the manual
+    // SI/OR number the cashier wrote and the POS SI it was recorded under.
+    // Tokens are kept comma-free (any comma inside a manual reference becomes a
+    // space) because the monthly consolidation below splits remarks on commas to
+    // union each day's tokens.
+    const MAX_MANUAL_SI_TOKENS = 10;
+    const manualSITokens = Array.from(
+      new Set(
+        rows
+          .filter((i) => String(i.manualReference || '').trim() !== '')
+          .sort((a, b) => (Number(a.receiptNo) || 0) - (Number(b.receiptNo) || 0))
+          .map((i) => {
+            const refText = String(i.manualReference).trim().replace(/,/g, ' ');
+            const posSI = formatReceiptNoWithCycle(i.receiptCycle, i.receiptNo);
+            return posSI ? `MANUAL SI ${refText} (POS SI ${posSI})` : `MANUAL SI ${refText}`;
+          }),
+      ),
+    );
+    const remarksTokens: string[] = [];
+    if (manualSITokens.length > MAX_MANUAL_SI_TOKENS) {
+      // Cap the cell: a heavy manual-receipt day would otherwise render a remarks
+      // cell hundreds of characters wide. The full per-receipt list stays
+      // available in the Manual Transactions report.
+      remarksTokens.push(
+        ...manualSITokens.slice(0, MAX_MANUAL_SI_TOKENS),
+        `+${manualSITokens.length - MAX_MANUAL_SI_TOKENS} more MANUAL SI`,
+      );
+    } else {
+      remarksTokens.push(...manualSITokens);
+    }
+    const remarks = remarksTokens.join(', ');
 
     const grandAccumBeginningBalance = prevGrandAccumBeginningBalance;
 
@@ -240,13 +318,21 @@ export const SalesSummary = ({
 
     const yymmdd = Moment(key, 'YYYY-MM-DD').format('YYMMDD');
     const overrun = overrunByDate?.[yymmdd];
-    const perDateReset = resetNoByDate?.[yymmdd];
-    const derivedReset = Math.floor((Number(grandAccumEndingBalance) || 0) / ACCUMULATED_SALES_RESET_THRESHOLD);
-    const resetCounter = String(perDateReset != null ? perDateReset : derivedReset).padStart(2, '0');
+    // Reset Counter (BIRresetNo) is a pure function of accumulated sales: it
+    // advances once per 12-digit max (₱9,999,999,999.99 -> threshold
+    // ₱10,000,000,000) that the monotonic accumulated gross has crossed.
+    // Do NOT read the Z-history snapshot here: those snapshots recorded the
+    // then-current global BIRresetNo, which for historical/re-downloaded data is
+    // uniformly the latest value (e.g. 02 on every row) rather than the value as
+    // of that day. Deriving from the accumulated balance matches the Z-reading
+    // receipt (same crossing logic) and yields 00/01/02 correctly.
+    const resetCounter = String(
+      Math.floor((Number(grandAccumEndingBalance) || 0) / ACCUMULATED_SALES_RESET_THRESHOLD),
+    ).padStart(2, '0');
     const zCounter = (zCounters && zCounters[yymmdd]) ?? zReadNo ?? 0;
 
     sheet1.push([
-      key,
+      Moment(key, 'YYYY-MM-DD').format('MM/DD/YYYY'),
       formatReceiptNoWithCycle(beginningReceiptCycle, beginningReceiptNo),
       formatReceiptNoWithCycle(endingReceiptCycle, endingReceiptNo),
       normalizeNumber(grandAccumEndingBalance),
@@ -284,7 +370,7 @@ export const SalesSummary = ({
       normalizeNumber(totalIncome),
       resetCounter,
       normalizeNumber(zCounter),
-      '',
+      remarks,
     ]);
   }
 
@@ -295,15 +381,25 @@ export const SalesSummary = ({
     const num = (v: any) => (v === '' || v == null ? 0 : Number(v) || 0);
     const sumCol = (c: number) => sheet1.reduce((s, r) => s + num(r[c]), 0);
     const consolidated: any[] = new Array(firstRow.length).fill('');
-    consolidated[0] = Moment(firstRow[0], 'YYYY-MM-DD').format('YYYY-MM');
+    consolidated[0] = Moment(firstRow[0], 'MM/DD/YYYY').format('YYYY-MM');
     consolidated[1] = firstRow[1];
     consolidated[2] = lastRow[2];
     consolidated[3] = lastRow[3];
     consolidated[4] = firstRow[4];
     for (let c = 5; c <= 35; c++) consolidated[c] = normalizeNumber(sumCol(c));
-    consolidated[36] = lastRow[36];
-    consolidated[37] = lastRow[37];
-    consolidated[38] = '';
+    consolidated[36] = lastRow[36]; // Reset Counter (carry last)
+    consolidated[37] = lastRow[37]; // Z-Counter (carry last)
+    // Remarks: union of every day's comma-separated tokens (e.g. "MANUAL SI").
+    consolidated[38] = Array.from(
+      new Set(
+        sheet1.flatMap((r) =>
+          String(r[38] || '')
+            .split(',')
+            .map((t) => t.trim())
+            .filter(Boolean),
+        ),
+      ),
+    ).join(', ');
     return { sheet1: [consolidated], sheetBreakdown };
   }
 
@@ -351,7 +447,7 @@ export const DetailedSalesReport = (
   }
 
   const header = [
-    'Date', 'Time', 'SI/OR No.', 'Sales Issued w/ Manual SI/OR', 'Gross Sales',
+    'Date', 'Time', 'SI No.', 'Sales Issued w/ Manual SI', 'Gross Sales',
     'VATable Sales', 'VAT-Exempt Sales', 'VAT Zero-Rated Sales', 'VAT Amount (VATable Only)',
     'Service Charge', 'SC Discount', 'PWD Discount', 'NAAC Discount', 'Solo Parent Discount',
     'Medal of Valor Discount', 'Regular Discount', 'Total Discount',
@@ -365,7 +461,13 @@ export const DetailedSalesReport = (
   for (const t of sorted as any[]) {
     const key = t.key;
     const ts = key != null ? parseInt(String(key), 10) : 0;
-    const dateStr = t.date || (ts ? Moment.unix(ts).format('YYYY-MM-DD') : '');
+    // Display column: match the SI's MM/DD/YYYY. `t.date` arrives as an
+    // ISO-ish grouping key, so parse it rather than printing it raw.
+    const dateStr = t.date
+      ? Moment(t.date, ['YYYY-MM-DD', 'MM/DD/YYYY']).format('MM/DD/YYYY')
+      : ts
+        ? Moment.unix(ts).format('MM/DD/YYYY')
+        : '';
     const timeStr = ts ? Moment.unix(ts).format('HH:mm') : '';
 
     const gross =
@@ -403,7 +505,8 @@ export const DetailedSalesReport = (
     ]);
   }
 
-  return { sheetRows };
+  // Totals row last. Identifier and running columns are excluded by header.
+  return { sheetRows: appendTotalsRow(sheetRows) };
 };
 
 export const SALES_SUMMARY_COLUMNS = [
@@ -412,7 +515,7 @@ export const SALES_SUMMARY_COLUMNS = [
   'Ending SI No.',
   'Grand Accum. Sales Ending Balance',
   'Grand Accum. Beg. Balance',
-  'Sales Issued w/ Manual SI/OR (per RR 16-2018)',
+  'Sales Issued w/ Manual SI (per RR 16-2018)',
   'Gross Sales for the Day',
   'VATable Sales',
   'VAT Amount',

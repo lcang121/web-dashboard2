@@ -1,8 +1,109 @@
 import Moment from 'moment-timezone';
 
 import { calcReadingData } from './calcReadingData';
-import { ACCUMULATED_SALES_RESET_THRESHOLD } from './reading';
-import { alignMiddle, alignRight, fixnum, newline, normalize, bold, pipe } from './receiptFormatters';
+import { ACCUMULATED_SALES_RESET_THRESHOLD, getAllTendersFrom } from './reading';
+import { alignMiddle, alignRight, fixnum, newline, normalize, bold, pipe } from './format';
+
+/**
+ * Print a payment row, wrapping a tender name too long for the label column
+ * instead of truncating it to its first two words.
+ */
+const paymentLine = (
+  label: string,
+  value: number,
+  width: number,
+  sa: (t: string) => string,
+  ss: (t: string) => string,
+  money: (n: number) => string,
+): string => {
+  if (label.length + 1 <= width) return sa(`${label}:`) + ss(money(value));
+
+  const words = label.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length <= width) {
+      current = candidate;
+    } else {
+      if (current) lines.push(current);
+      current = word.length > width ? word.slice(0, width) : word;
+    }
+  }
+  if (current) lines.push(current);
+
+  let out = '';
+  for (let i = 0; i < lines.length - 1; i++) out += sa(lines[i]);
+  return out + sa(`${lines[lines.length - 1]}:`) + ss(money(value));
+};
+
+/** Built-in tender rows. `showAtZero` keeps a spurious "CHEQUE: 0.00" off the slip. */
+export const BUILT_IN_TENDER_ROWS: ReadonlyArray<{ name: string; showAtZero: boolean }> = [
+  { name: 'GCash', showAtZero: true },
+  { name: 'Maya', showAtZero: true },
+  { name: 'Credit Card', showAtZero: true },
+  { name: 'Debit Card', showAtZero: true },
+  { name: 'Check', showAtZero: false },
+  { name: 'Gift Check', showAtZero: false },
+  { name: 'Gift Card', showAtZero: true },
+];
+
+/** Matching key for a tender name. Mirrors the tender catalog's own comparison. */
+const canonicalTenderKey = (name: unknown): string =>
+  String(name == null ? '' : name).trim().toLowerCase();
+
+/**
+ * Every tender row a reading should print, in a stable order.
+ *
+ * `nonCashPayments` is keyed by whatever tender names the transactions in the
+ * range happened to carry, so a bare `for...in` both emits the lines in arrival
+ * order — GrabFood above FoodPanda on one reading and below it on the next —
+ * and omits any method that took no money at all. BIR's tester reported the
+ * second half of that: "if the other payment methods are not used, it's not
+ * showing up even as ZERO".
+ *
+ * So this is a UNION, not a filter. The result is: built-ins in
+ * BUILT_IN_TENDER_ROWS order, then every configured tender in configured order,
+ * then any remaining data key in arrival order.
+ *
+ * No amount moves. Every key present in `nonCashPayments` is returned exactly
+ * once and keeps its own spelling, so each lookup still finds its own figure. A
+ * catalog name only contributes a row when NO data key matches it
+ * case-insensitively, which stops a wallet picker's 'Gcash' rendering beside a
+ * seeded 'GCash' as two rows. Two data keys differing only by case stay two rows
+ * on purpose — merging them would change a printed figure.
+ */
+export const orderNonCashPaymentKeys = (
+  nonCashPayments: Record<string, any> | null | undefined,
+  settings?: any,
+): string[] => {
+  const dataKeys = Object.keys(nonCashPayments || {});
+  const dataByCanonical = new Map<string, string[]>();
+  for (const key of dataKeys) {
+    const canonical = canonicalTenderKey(key);
+    if (!canonical) continue;
+    const bucket = dataByCanonical.get(canonical);
+    if (bucket) bucket.push(key);
+    else dataByCanonical.set(canonical, [key]);
+  }
+
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  const take = (name: unknown, showAtZero: boolean) => {
+    const canonical = canonicalTenderKey(name);
+    if (!canonical || seen.has(canonical)) return;
+    seen.add(canonical);
+    const withData = dataByCanonical.get(canonical);
+    if (withData) ordered.push(...withData);
+    else if (showAtZero) ordered.push(String(name).trim());
+  };
+
+  BUILT_IN_TENDER_ROWS.forEach((t) => take(t.name, t.showAtZero));
+  getAllTendersFrom(settings).forEach((t: any) => take(t && t.name, true));
+  // Whatever is left keeps its original relative order.
+  dataKeys.forEach((key) => take(key, true));
+  return ordered;
+};
 
 /**
  * Renders a BIR X/Z/Custom reading as receipt text. Faithful port of the mobile
@@ -248,29 +349,33 @@ export function renderReading(
     out += sa('Opening Fund:') + ss(_money(openingFund));
     out += mm(totalPaymentsSeparator);
     out += mmBold('PAYMENTS RECEIVED');
+    // Payments Received should reflect net kept payments after reversals.
     const paymentsReceivedCash = Math.max(0, effectiveCashTendered);
-    const defaultPaymentsReceivedOrder = ['Cash', 'GCash', 'Maya', 'Credit Card', 'Debit Card', 'Gift Card'];
-    const allPaymentTotals: Record<string, number> = defaultPaymentsReceivedOrder.reduce((acc, payment) => {
-      acc[payment] = 0;
-      return acc;
-    }, {} as Record<string, number>);
-    allPaymentTotals.Cash = paymentsReceivedCash;
-    for (const [payment, amount] of Object.entries(nonCashPayments || {})) {
-      allPaymentTotals[payment] = Number(amount) || 0;
+    // Built-ins first (always shown, including zeros), then merchant-defined
+    // tenders in configured order, then anything else that turned up — a tender
+    // that has since been deactivated still has to render on a historical read.
+    // The zero rows and the ordering both come from orderNonCashPaymentKeys, so
+    // this block and the TRANSACTION SUMMARY below print the same set of tenders
+    // in the same sequence.
+    const orderedTenderKeys = orderNonCashPaymentKeys(nonCashPayments, settings);
+    const allPaymentTotals: Record<string, number> = { Cash: paymentsReceivedCash };
+    for (const key of orderedTenderKeys) {
+      allPaymentTotals[key] = Number((nonCashPayments || {})[key]) || 0;
     }
-    if (displayGiftCardOver > 0) allPaymentTotals['Excess GC'] = displayGiftCardOver;
-    for (const payment in allPaymentTotals) {
+
+    const orderedPaymentKeys = ['Cash', ...orderedTenderKeys];
+
+    if (displayGiftCardOver > 0) {
+      allPaymentTotals['Excess GC'] = displayGiftCardOver;
+      orderedPaymentKeys.push('Excess GC');
+    }
+
+    for (const payment of orderedPaymentKeys) {
       const value = Number(allPaymentTotals[payment]) || 0;
       const paymentLabel = payment.toUpperCase() === 'CHECK' ? 'CHEQUE' : payment.toUpperCase();
-      if (payment.length > S) {
-        const [top, bot] = paymentLabel.split(' ', 2);
-        out += sa(`${top} -`);
-        out += sa(`${bot}:`) + ss(_money(value));
-      } else {
-        out += sa(`${paymentLabel}:`) + ss(_money(value));
-      }
+      out += paymentLine(paymentLabel, value, S, sa, ss, _money);
     }
-    const totalPayments = Math.round(Object.keys(allPaymentTotals).reduce((sum, k) => sum + (Number(allPaymentTotals[k]) || 0), 0) * 100) / 100;
+    const totalPayments = Math.round(orderedPaymentKeys.reduce((sum, k) => sum + (Number(allPaymentTotals[k]) || 0), 0) * 100) / 100;
     out += sa('Total Payments:') + ss(_money(totalPayments));
     out += mm(totalPaymentsSeparator);
     out += sa('CANCELLED') + ss(_money(cancelledAmount));
@@ -288,20 +393,18 @@ export function renderReading(
     out += sa('Opening Fund:') + ss(_money(openingFund));
     out += sa('Cash Added:') + ss(_money(addedCash));
     out += sa('Cash Tendered:') + ss(_money(effectiveCashTendered));
-    for (const payment in nonCashPayments) {
+    for (const payment of orderNonCashPaymentKeys(nonCashPayments, settings)) {
       if (payment === 'Gift Card') continue;
       const value = Number(nonCashPayments[payment]) || 0;
       const paymentLabel = payment.toUpperCase() === 'CHECK' ? 'CHEQUE' : payment.toUpperCase() === 'GIFT CHECK' ? 'GIFT CHECK' : payment;
-      if (paymentLabel.length > S) {
-        const [top, bot] = paymentLabel.split(' ', 2);
-        out += sa(`${top} -`);
-        out += sa(`${bot}:`) + ss(_money(value));
-      } else {
-        out += sa(`${paymentLabel}:`) + ss(_money(value));
-      }
+      out += paymentLine(paymentLabel, value, S, sa, ss, _money);
     }
+    // Gift Card is a checkout button like Credit Card, and PAYMENTS RECEIVED
+    // above has always printed it at 0.00; hiding it two blocks later on the
+    // same slip is exactly the inconsistency the tester reported. Unconditional
+    // now, still in its own slot (skipped by the loop) so the row does not move.
     const consumedGCX = Number(nonCashPayments['Gift Card']) || 0;
-    if (consumedGCX > 0) out += sa('Gift Card:') + ss(_money(consumedGCX));
+    out += sa('Gift Card:') + ss(_money(consumedGCX));
     out += sa('Excess GC:') + ss(_money(displayGiftCardOver));
     const xComputedEnding = Math.round((openingFund + addedCash + effectiveCashTendered + displayGiftCardOver) * 100) / 100;
     out += sa('Ending Balance:') + ss(_money(xComputedEnding));
@@ -419,20 +522,15 @@ export function renderReading(
     out += sa('Opening Fund:') + ss(_money(Number(cashdrawer?.startingCash ?? 0)));
     out += sa('Cash Added:') + ss(_money(cashdrawer?.addedCash ?? 0));
     out += sa('Cash Tendered:') + ss(_money(effectiveCashTendered));
-    for (const payment in nonCashPayments) {
+    for (const payment of orderNonCashPaymentKeys(nonCashPayments, settings)) {
       if (payment === 'Gift Card') continue;
-      const value = nonCashPayments[payment];
+      const value = Number(nonCashPayments[payment]) || 0;
       const paymentLabel = payment.toUpperCase() === 'CHECK' ? 'CHEQUE' : payment.toUpperCase() === 'GIFT CHECK' ? 'GIFT CHECK' : payment;
-      if (paymentLabel.length > S) {
-        const [top, bot] = paymentLabel.split(' ', 2);
-        out += sa(`${top} -`);
-        out += sa(`${bot}:`) + ss(_money(value));
-      } else {
-        out += sa(`${paymentLabel}:`) + ss(_money(value));
-      }
+      out += paymentLine(paymentLabel, value, S, sa, ss, _money);
     }
+    // Unconditional, matching the X block above and PAYMENTS RECEIVED.
     const consumedGCZ = Number(nonCashPayments['Gift Card']) || 0;
-    if (consumedGCZ > 0) out += sa('Gift Card:') + ss(_money(consumedGCZ));
+    out += sa('Gift Card:') + ss(_money(consumedGCZ));
     out += sa('Excess GC:') + ss(_money(displayGiftCardOver));
     const zComputedEnding = Math.round((
       Number(cashdrawer?.startingCash || 0) +

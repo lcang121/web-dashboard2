@@ -189,7 +189,13 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
     for (const item of value.items) {
       if (isAdjustmentClone(item)) continue;
 
-      const vatType = item._defaultVatType;
+      // Only `_defaultVatType` is authoritative; for older records the legacy
+      // `zeroVAT` item flag is honoured here too.
+      const vatType = item._defaultVatType
+        ? item._defaultVatType
+        : item.zeroVAT
+          ? 'vatExempt'
+          : 'vatable';
       const itemDiscType = normalizeDiscountType(item.individualDiscountType || '');
       const txnDiscType = normalizeDiscountType(item.transactionDiscountType || '');
       const discountType = itemDiscType || txnDiscType;
@@ -197,9 +203,12 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
       const txnDiscountPct = item.discountSubtotal || 0;
       const discount = itemDiscount || txnDiscountPct;
       const totalPrice = item.price * item.quantity;
-      const baseAmount = totalPrice / (1 + VAT_RATE);
+      // Only VATable prices carry VAT to strip. A vatExempt / zeroVat price is
+      // already the base amount.
+      const baseAmount = vatType === 'vatable' ? totalPrice / (1 + VAT_RATE) : totalPrice;
       const refunded = item.refunded;
       const returned = item.returned;
+      const voided = item.voided;
 
       // Handle PAX discount items
       if (item.paxDiscount) {
@@ -267,7 +276,9 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
           } else if (normalizedPaxType === 'regular') {
             if (discRate > 0) {
               deductions.discount.others += proportionalAmount * discRate;
-              adjustmentOnVat.discount.others += proportionalAmount * discRate * VAT_RATE;
+              if (vatType === 'vatable') {
+                adjustmentOnVat.discount.others += proportionalAmount * discRate * VAT_RATE;
+              }
             }
           }
         }
@@ -309,7 +320,9 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
         adjustmentOnVat.discount.soloParent += baseAmount * SOLO_PARENT_RATE * (VAT_RATE / SOLO_PARENT_RATE);
       } else if (itemDiscType === 'regular' && itemDiscount > 0) {
         deductions.discount.others += baseAmount * (itemDiscount / 100);
-        adjustmentOnVat.discount.others += baseAmount * VAT_RATE * (itemDiscount / 100);
+        if (vatType === 'vatable') {
+          adjustmentOnVat.discount.others += baseAmount * VAT_RATE * (itemDiscount / 100);
+        }
       }
 
       // Transaction-level discounts
@@ -333,7 +346,9 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
           adjustmentOnVat.discount.soloParent += baseAmount * SOLO_PARENT_RATE * (VAT_RATE / SOLO_PARENT_RATE);
         } else if (txnDiscType === 'regular' && txnDiscountPct > 0) {
           deductions.discount.others += baseAmount * (txnDiscountPct / 100);
-          adjustmentOnVat.discount.others += baseAmount * VAT_RATE * (txnDiscountPct / 100);
+          if (vatType === 'vatable') {
+            adjustmentOnVat.discount.others += baseAmount * VAT_RATE * (txnDiscountPct / 100);
+          }
         }
       }
 
@@ -348,17 +363,26 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
         deductions.returns += baseAmount - baseAmount * COMMODITY_RATE;
       } else if (returned && discountType === 'ntlAthlete') {
         deductions.returns += baseAmount - baseAmount * NAAC_RATE;
-        adjustmentOnVat.returns += baseAmount * VAT_RATE;
+        if (vatType === 'vatable') {
+          adjustmentOnVat.returns += baseAmount * VAT_RATE;
+        }
       } else if (returned && discountType === 'soloParent') {
         deductions.returns += baseAmount - baseAmount * SOLO_PARENT_RATE;
       } else if (returned && discountType === 'regular') {
         deductions.returns += baseAmount - baseAmount * (discount / 100);
-        adjustmentOnVat.returns += baseAmount * VAT_RATE - baseAmount * VAT_RATE * (discount / 100);
-      } else if (returned && (discountType === 'diplomat' || vatType === 'zeroVat')) {
+        if (vatType === 'vatable') {
+          adjustmentOnVat.returns += baseAmount * VAT_RATE - baseAmount * VAT_RATE * (discount / 100);
+        }
+      } else if (
+        returned &&
+        (discountType === 'diplomat' || vatType === 'zeroVat' || vatType === 'zeroVAT')
+      ) {
         deductions.returns += baseAmount;
       } else if (returned) {
         deductions.returns += baseAmount;
-        adjustmentOnVat.returns += baseAmount * VAT_RATE;
+        if (vatType === 'vatable') {
+          adjustmentOnVat.returns += baseAmount * VAT_RATE;
+        }
       }
 
       // Refunds — VAT adjustment for refunds captured separately (refundVatReturns).
@@ -376,10 +400,36 @@ export const getTransactionSummary = (snapshot: any): TransactionSummaryItem[] =
         deductions.returns += baseAmount - baseAmount * SOLO_PARENT_RATE;
       } else if (refunded && discountType === 'regular') {
         deductions.returns += baseAmount - baseAmount * (discount / 100);
-      } else if (refunded && (discountType === 'diplomat' || vatType === 'zeroVat')) {
+      } else if (
+        refunded &&
+        (discountType === 'diplomat' || vatType === 'zeroVat' || vatType === 'zeroVAT')
+      ) {
         deductions.returns += baseAmount;
       } else if (refunded) {
         deductions.returns += baseAmount;
+      }
+
+      // Voids bucket. The device gates this on all three reversal flags being
+      // set at once, so it only fires for a line that was voided *and* returned
+      // *and* refunded; kept as-is for parity with the reading it feeds.
+      if (voided && returned && refunded) {
+        if (discountType === 'senior') {
+          deductions.voids += baseAmount * (1 - SENIOR_RATE);
+        } else if (discountType === 'pwd') {
+          deductions.voids += baseAmount * (1 - PWD_RATE);
+        } else if (discountType === 'medalOfValor') {
+          deductions.voids += baseAmount * (1 - MEDAL_OF_VALOR_RATE);
+        } else if (discountType === 'commodity') {
+          deductions.voids += baseAmount * (1 - COMMODITY_RATE);
+        } else if (discountType === 'ntlAthlete') {
+          deductions.voids += baseAmount * (1 - NAAC_RATE);
+        } else if (discountType === 'soloParent') {
+          deductions.voids += baseAmount * (1 - SOLO_PARENT_RATE);
+        } else if (discountType === 'regular') {
+          deductions.voids += baseAmount * (1 - (Number(discount) || 0) / 100);
+        } else {
+          deductions.voids += baseAmount;
+        }
       }
     }
 

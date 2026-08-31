@@ -299,7 +299,7 @@ export const calcReadingData = (
     refundVatReturns +
     vatOnReturnsComputed;
 
-  const refundTotal = sumBy(safeRefundSummary as RefundSummaryItem[], (i) => i.vatableSales + i.vatExemptSales + i.zeroRatedSales) || 0;
+  const refundTotal = sumBy(safeRefundSummary as RefundSummaryItem[], (i: RefundSummaryItem) => i.vatableSales + i.vatExemptSales + i.zeroRatedSales) || 0;
   const refundNetAmount = sumBy(
     safeRefundSummary as RefundSummaryItem[],
     (i: any) => {
@@ -323,10 +323,10 @@ export const calcReadingData = (
   ) || 0;
 
   const refundSalesAdjustmentAmount =
-    sumBy(safeRefundSummary as RefundSummaryItem[], (i) => i.vatableSales + i.vatExemptSales + i.zeroRatedSales) || 0;
+    sumBy(safeRefundSummary as RefundSummaryItem[], (i: RefundSummaryItem) => i.vatableSales + i.vatExemptSales + i.zeroRatedSales) || 0;
   const refundBaseAmount = sumBy(
     safeRefundSummary as RefundSummaryItem[],
-    (i) => i.vatableSales + i.vatExemptSales + i.zeroRatedSales,
+    (i: RefundSummaryItem) => i.vatableSales + i.vatExemptSales + i.zeroRatedSales,
   ) || 0;
   const refundGrandTotal = refundTotal;
   const lessRefundAmount = Math.abs(refundNetAmount || refundSalesAdjustmentAmount || refundBaseAmount || refundTotal);
@@ -348,23 +348,30 @@ export const calcReadingData = (
     return String(k).trim();
   };
 
+  // Use || not ??: these are string identifiers, and a writer that BLANKS the
+  // field ('') instead of omitting it must still fall through to the next
+  // candidate. With ?? an empty originalTransactionKey masks the non-empty
+  // transactionKey, normalizeTxnKey('') coerces to '0' (Number('') === 0), and
+  // the real key silently drops out of reversedTxnKeys — which flips
+  // allOriginalsReversed and therefore the Net Sales figure below. Every other
+  // consumer of these fields already treats '' as absent.
   const originalTxnKeys = new Set(
     originalTxns
-      .map((i: any) => normalizeTxnKey(i.key ?? i.transactionKey))
+      .map((i: any) => normalizeTxnKey(i.key || i.transactionKey))
       .filter(Boolean),
   );
   const reversedTxnKeys = new Set<string>();
 
   for (const r of returnSummary?.returns || []) {
-    const k = normalizeTxnKey((r as any)?.originalTransactionKey ?? (r as any)?.transactionKey);
+    const k = normalizeTxnKey((r as any)?.originalTransactionKey || (r as any)?.transactionKey);
     if (k) reversedTxnKeys.add(k);
   }
   for (const v of voidSummary?.voids || []) {
-    const k = normalizeTxnKey((v as any)?.originalTransactionKey ?? (v as any)?.transactionKey);
+    const k = normalizeTxnKey((v as any)?.originalTransactionKey || (v as any)?.transactionKey);
     if (k) reversedTxnKeys.add(k);
   }
   for (const rf of safeRefundSummary || []) {
-    const k = normalizeTxnKey((rf as any)?.originalTransactionKey ?? (rf as any)?.transactionKey);
+    const k = normalizeTxnKey((rf as any)?.originalTransactionKey || (rf as any)?.transactionKey);
     if (k) reversedTxnKeys.add(k);
   }
 
@@ -434,12 +441,18 @@ export const calcReadingData = (
   const endingReturn = last(safeReturnSummary)?.returnNo ?? 0;
 
   // Cash tendered from original (non-reversed) transactions' Cash payments.
-  const cashTendered = sumPrecise(originalTxns, (i: any) => {
-    const totals = i.paymentTypeTotals;
-    if (!totals) return 0;
-    const arr = Array.isArray(totals) ? totals : [totals];
-    return arr.reduce((s: number, p: any) => s + (Number(p?.Cash) || 0), 0);
-  });
+  // Only positive legs count: a negative Cash entry is a reversal, and those are
+  // netted out of the reading separately, so adding them here would double-count.
+  const cashTendered = originalTxns
+    .flatMap((i: TxnSummary) => {
+      const totals = i.paymentTypeTotals;
+      if (!totals) return [];
+      return Array.isArray(totals) ? totals : [totals];
+    })
+    .reduce((sum: number, payment: any) => {
+      const cash = Number(payment?.Cash) || 0;
+      return cash > 0 ? sum + cash : sum;
+    }, 0);
 
   // VAT Payable = vatAmount - (vatOnReturns + refundVatReturns + voidVatAdj)
   // Note: NOT subtracting discount VAT adjustments
@@ -488,7 +501,7 @@ export const calcReadingData = (
     nonCashPayments,
     totalReturnAmount: normalizeNumber(Math.abs(totalReturnAmount)),
     serviceCharge: normalizeNumber(serviceCharge),
-    cashTendered: normalizeNumber(cashTendered),
+    cashTendered,
     vatPayable: normalizeNumber(vatPayable),
   };
 };

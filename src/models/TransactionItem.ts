@@ -1,7 +1,10 @@
 // TypeScript port of mobile TransactionItem.js — keep in sync with utakmobileBIR
 
+import { roundMoney, calcPaxDiscount, PaxDiscountResult, PaxPart } from '../utils/bir/money';
+
 export const DISCOUNT_TYPES = [
-  'regular', 'senior', 'pwd', 'ntlAthlete', 'diplomat', 'soloParent', 'commodity',
+  'regular', 'senior', 'pwd', 'ntlAthlete', 'diplomat', 'soloParent', 'medalOfValor',
+  'commodity', 'promotional',
 ] as const;
 export type DiscountType = typeof DISCOUNT_TYPES[number];
 
@@ -27,31 +30,11 @@ export interface PaxDiscountEntry {
   percent?: string | number;
 }
 
-export interface PartResult {
-  vatType: string;
-  discType: string;
-  discRate: number;
-  guestCount: number;
-  vatExemption: number;
-  grossSales: number;
-  discount: number;
-  netSales: number;
-  vat: number;
-  service: number;
-  total: number;
-}
+/** Per-guest part of a PAX-discounted item. Shape owned by calcPaxDiscount. */
+export type PartResult = PaxPart;
 
-export interface BuildPartsResult {
-  guestCount: number;
-  values: Record<string, PartResult>;
-  vatExemption: number;
-  discount: number;
-  vat: number;
-  service: number;
-  grossSales: number;
-  netSales: number;
-  total: number;
-}
+/** Aggregated PAX parts for an item. Shape owned by calcPaxDiscount. */
+export type BuildPartsResult = PaxDiscountResult;
 
 class TransactionItem {
   static readonly SENIOR_AND_PWD_DISCOUNT_RATE_WITH_VAT_EXEMPTION_RATE_FROM_DB = 28.5714285;
@@ -66,7 +49,9 @@ class TransactionItem {
       diplomat: 0,
       ntlAthlete: 0.2,
       soloParent: 0.1,
+      medalOfValor: 0.2,
       commodity: 0.05,
+      promotional: 0,
     } as Record<string, number>,
   };
 
@@ -140,7 +125,7 @@ class TransactionItem {
     this._defaultVatType = val._defaultVatType;
     this._inferDiscount('itm', val.individualDiscountType, val.discount);
     this._inferDiscount('txn', val.transactionDiscountType, val.discountSubtotal);
-    this._parts = buildParts({ val }, this.vatRate);
+    this._parts = buildParts({ val }, this.vatRate, this.svcRate);
   }
 
   get _fix_multipleVatRemovals(): boolean {
@@ -203,7 +188,7 @@ class TransactionItem {
       : 'regular';
 
     const isCommodity = this.original.isCommodity === true;
-    const commodityDiscountTypes = ['senior', 'pwd'];
+    const commodityDiscountTypes = ['senior', 'pwd', 'medalOfValor'];
     const isCommodityDiscount = isCommodity && commodityDiscountTypes.includes(type);
 
     let defaultRate = this._opts.specialDiscountRates[type];
@@ -212,6 +197,8 @@ class TransactionItem {
 
     let rate: number;
     if (type === 'regular') {
+      rate = TransactionItem.numberOrZero(_rate) / 100;
+    } else if (type === 'promotional') {
       rate = TransactionItem.numberOrZero(_rate) / 100;
     } else if (isCommodityDiscount) {
       rate = defaultRate;
@@ -240,7 +227,7 @@ class TransactionItem {
   }
 
   get $itmDiscount(): number {
-    if (this.itmDiscType === 'regular') {
+    if (this.itmDiscType === 'regular' || this.itmDiscType === 'promotional') {
       if (this.itmDiscRate >= 1) return this.$baseSales;
       return this.$baseSales * this.itmDiscRate;
     }
@@ -248,7 +235,7 @@ class TransactionItem {
   }
 
   get $txnDiscount(): number {
-    if (this.txnDiscType === 'regular') {
+    if (this.txnDiscType === 'regular' || this.txnDiscType === 'promotional') {
       if (this.txnDiscRate >= 1) return this.$baseSales;
       return this.$baseSales * this.txnDiscRate;
     }
@@ -257,7 +244,9 @@ class TransactionItem {
 
   get $discount(): number {
     const total = this.$itmDiscount + this.$txnDiscount;
-    const hasRegular = this.itmDiscType === 'regular' || this.txnDiscType === 'regular';
+    const hasRegular =
+      ((this.itmDiscType === 'regular' || this.itmDiscType === 'promotional') && this.itmDiscRate > 0) ||
+      ((this.txnDiscType === 'regular' || this.txnDiscType === 'promotional') && this.txnDiscRate > 0);
     if (this.vatType === 'vatable' && hasRegular && (this.itmDiscRate >= 1 || this.txnDiscRate >= 1)) {
       return Math.min(total, this.$baseSales);
     }
@@ -265,6 +254,13 @@ class TransactionItem {
   }
 
   get $service(): number {
+    if (this._parts) return this._parts.service;
+    const isNaac =
+      this.vatType === 'vatable' &&
+      (this.itmDiscType === 'ntlAthlete' || this.txnDiscType === 'ntlAthlete');
+    if (isNaac) {
+      return (this.$grossSales - this.$discount) * this.svcRate;
+    }
     return this.$netSales * this.svcRate;
   }
 
@@ -273,7 +269,9 @@ class TransactionItem {
   }
 
   get $netSales(): number {
-    const hasRegular = this.itmDiscType === 'regular' || this.txnDiscType === 'regular';
+    const hasRegular =
+      ((this.itmDiscType === 'regular' || this.itmDiscType === 'promotional') && this.itmDiscRate > 0) ||
+      ((this.txnDiscType === 'regular' || this.txnDiscType === 'promotional') && this.txnDiscRate > 0);
     if (this.vatType === 'vatable' && hasRegular) {
       const cap = this.$baseSales >= 0 ? this.$baseSales : -this.$baseSales;
       const discountToSubtract = Math.min(this.$discount, cap);
@@ -291,15 +289,32 @@ class TransactionItem {
   get $vat(): number {
     if (this._parts) return this._parts.vat;
     if (this.vatType !== 'vatable') return 0;
-    const hasRegular = this.itmDiscType === 'regular' || this.txnDiscType === 'regular';
+    const hasRegular =
+      ((this.itmDiscType === 'regular' || this.itmDiscType === 'promotional') && this.itmDiscRate > 0) ||
+      ((this.txnDiscType === 'regular' || this.txnDiscType === 'promotional') && this.txnDiscRate > 0);
+    const isNaac = this.itmDiscType === 'ntlAthlete' || this.txnDiscType === 'ntlAthlete';
+    if (isNaac) {
+      return this.$grossSales * this.vatRate;
+    }
     if (hasRegular || this.itmDiscRate >= 1 || this.txnDiscRate >= 1) {
       return this.$netSales * this.vatRate;
     }
     return this.$grossSales * this.vatRate;
   }
 
+  get $vatExemption(): number {
+    if (this._parts) return this._parts.vatExemption;
+    return 0;
+  }
+
   get $amountDue(): number {
     if (this._parts) return this._parts.total;
+    const isNaac =
+      this.vatType === 'vatable' &&
+      (this.itmDiscType === 'ntlAthlete' || this.txnDiscType === 'ntlAthlete');
+    if (isNaac) {
+      return this.$baseSales - this.$discount + this.$service;
+    }
     return this.$netSales + this.$service + this.$vat;
   }
 
@@ -339,7 +354,7 @@ class TransactionItem {
 
   get vatType(): string {
     const isCommodity = this.original.isCommodity === true;
-    const commodityDiscountTypes = ['senior', 'pwd'];
+    const commodityDiscountTypes = ['senior', 'pwd', 'medalOfValor'];
     const hasCommodityDiscount =
       isCommodity &&
       (commodityDiscountTypes.includes(this.itmDiscType) || commodityDiscountTypes.includes(this.txnDiscType));
@@ -355,7 +370,8 @@ class TransactionItem {
       return this.defaultVatType;
     }
 
-    return this.itmDiscType !== 'regular' || this.txnDiscType !== 'regular'
+    const isPlainVatable = (t: string) => t === 'regular' || t === 'promotional';
+    return !isPlainVatable(this.itmDiscType) || !isPlainVatable(this.txnDiscType)
       ? 'vatExempt'
       : this.original.zeroVAT
       ? 'vatExempt'
@@ -364,14 +380,19 @@ class TransactionItem {
 
   get __willRemoveItmVat(): boolean {
     const isCommodity = this.original.isCommodity === true;
-    const commodityDiscountTypes = ['senior', 'pwd'];
+    const commodityDiscountTypes = ['senior', 'pwd', 'medalOfValor'];
     if (isCommodity && commodityDiscountTypes.includes(this.itmDiscType)) return false;
     if (['diplomat'].includes(this.itmDiscType)) return false;
     if (['ntlAthlete'].includes(this.itmDiscType)) return false;
+    const isPlainVatable = (t: string) => t === 'regular' || t === 'promotional';
     if (this._fix_multipleVatRemovals) {
-      return !this.original.zeroVAT && this.defaultVatType === 'vatable' && this.itmDiscType !== 'regular';
+      return (
+        !this.original.zeroVAT &&
+        this.defaultVatType === 'vatable' &&
+        !isPlainVatable(this.itmDiscType)
+      );
     }
-    return this.itmDiscType !== 'regular';
+    return !isPlainVatable(this.itmDiscType);
   }
 
   get __discountBase(): number {
@@ -386,14 +407,14 @@ class TransactionItem {
   }
 
   get _effectiveItmDiscRate(): number {
-    const specialTypes = ['senior', 'pwd', 'ntlAthlete', 'diplomat', 'soloParent', 'commodity'];
+    const specialTypes = ['senior', 'pwd', 'ntlAthlete', 'diplomat', 'soloParent', 'medalOfValor', 'commodity'];
     if (!specialTypes.includes(this.itmDiscType) || this.defaultVatType !== 'vatable') return this.itmDiscRate;
     const defaultRate = this._opts.specialDiscountRates[this.itmDiscType] ?? 0.2;
     return TransactionItem.normalizeSpecialDiscountRate(this.itmDiscRate * 100, defaultRate, this.vatRate);
   }
 
   get itmDiscount(): number {
-    if (this.itmDiscType === 'regular') {
+    if (this.itmDiscType === 'regular' || this.itmDiscType === 'promotional') {
       if (this.itmDiscRate >= 1) return TransactionItem.round(this.$baseSales);
       return TransactionItem.round(this.$baseSales * this.itmDiscRate);
     }
@@ -416,19 +437,20 @@ class TransactionItem {
 
   get __willRemoveTxnVat(): boolean {
     const isCommodity = this.original.isCommodity === true;
-    const commodityDiscountTypes = ['senior', 'pwd'];
+    const commodityDiscountTypes = ['senior', 'pwd', 'medalOfValor'];
     if (isCommodity && commodityDiscountTypes.includes(this.txnDiscType)) return false;
     if (['diplomat'].includes(this.txnDiscType)) return false;
     if (['ntlAthlete'].includes(this.txnDiscType)) return false;
+    const isPlainVatable = (t: string) => t === 'regular' || t === 'promotional';
     if (this._fix_multipleVatRemovals) {
       return (
         !this.original.zeroVAT &&
         this.defaultVatType === 'vatable' &&
         !this.__willRemoveItmVat &&
-        this.txnDiscType !== 'regular'
+        !isPlainVatable(this.txnDiscType)
       );
     }
-    return this.txnDiscType !== 'regular';
+    return !isPlainVatable(this.txnDiscType);
   }
 
   get __txnVatExemption(): number {
@@ -442,14 +464,14 @@ class TransactionItem {
   }
 
   get _effectiveTxnDiscRate(): number {
-    const specialTypes = ['senior', 'pwd', 'ntlAthlete', 'diplomat', 'soloParent', 'commodity'];
+    const specialTypes = ['senior', 'pwd', 'ntlAthlete', 'diplomat', 'soloParent', 'medalOfValor', 'commodity'];
     if (!specialTypes.includes(this.txnDiscType) || this.defaultVatType !== 'vatable') return this.txnDiscRate;
     const defaultRate = this._opts.specialDiscountRates[this.txnDiscType] ?? 0.2;
     return TransactionItem.normalizeSpecialDiscountRate(this.txnDiscRate * 100, defaultRate, this.vatRate);
   }
 
   get txnDiscount(): number {
-    if (this.txnDiscType === 'regular') {
+    if (this.txnDiscType === 'regular' || this.txnDiscType === 'promotional') {
       if (this.txnDiscRate >= 1) return TransactionItem.round(this.$baseSales);
       return TransactionItem.round(this.$baseSales * this.txnDiscRate);
     }
@@ -459,7 +481,9 @@ class TransactionItem {
   get discount(): number {
     if (this._parts) return this._parts.discount;
     const total = this.itmDiscount + this.txnDiscount;
-    const hasRegular = this.itmDiscType === 'regular' || this.txnDiscType === 'regular';
+    const hasRegular =
+      ((this.itmDiscType === 'regular' || this.itmDiscType === 'promotional') && this.itmDiscRate > 0) ||
+      ((this.txnDiscType === 'regular' || this.txnDiscType === 'promotional') && this.txnDiscRate > 0);
     if (this.defaultVatType === 'vatable' && hasRegular && (this.itmDiscRate >= 1 || this.txnDiscRate >= 1)) {
       return TransactionItem.round(Math.min(total, this.$baseSales));
     }
@@ -468,6 +492,12 @@ class TransactionItem {
 
   get service(): number {
     if (this._parts) return this._parts.service;
+    const isNaac =
+      this.vatType === 'vatable' &&
+      (this.itmDiscType === 'ntlAthlete' || this.txnDiscType === 'ntlAthlete');
+    if (isNaac) {
+      return roundMoney((this.$grossSales - this.$discount) * this.svcRate);
+    }
     return this.__itmTotal * this.svcRate;
   }
 
@@ -489,7 +519,9 @@ class TransactionItem {
   get vat(): number {
     if (this._parts) return this._parts.vat;
     if (this.vatType !== 'vatable') return 0;
-    const hasRegular = this.itmDiscType === 'regular' || this.txnDiscType === 'regular';
+    const hasRegular =
+      ((this.itmDiscType === 'regular' || this.itmDiscType === 'promotional') && this.itmDiscRate > 0) ||
+      ((this.txnDiscType === 'regular' || this.txnDiscType === 'promotional') && this.txnDiscRate > 0);
     const vatableDiscounts = ['ntlAthlete'];
     if (vatableDiscounts.includes(this.itmDiscType) || vatableDiscounts.includes(this.txnDiscType)) {
       return TransactionItem.round(this.$grossSales * this.vatRate);
@@ -511,101 +543,11 @@ class TransactionItem {
 
 export default TransactionItem;
 
-function buildParts({ val }: { val: TransactionItemValue }, vatRate: number): BuildPartsResult | null {
+function buildParts(
+  { val }: { val: TransactionItemValue },
+  vatRate: number,
+  svcRate: number,
+): BuildPartsResult | null {
   if (!val.paxDiscount) return null;
-
-  const values: Record<string, PartResult> = {};
-  const _qp = 100 * (parseFloat(val.quantity as string) || 1) * (parseFloat(val.price as string) || 0);
-  const defaultVatType = val._defaultVatType ? val._defaultVatType : val.zeroVAT ? 'vatExempt' : 'vatable';
-  const svcRate = (parseFloat(val.service as string) || 0) / 100;
-  const guestCount = Object.values(val.paxDiscount).reduce(
-    (a, e) => a + (parseInt(e.guestCount as any, 10) || 0),
-    0
-  );
-
-  let vatExemption = 0, discount = 0, vat = 0, service = 0, grossSales = 0, netSales = 0, total = 0;
-
-  for (const [discType, discObj] of Object.entries(val.paxDiscount)) {
-    const part = {} as PartResult;
-    values[discType] = part;
-    const guestRatio = discObj.guestCount / guestCount;
-    const proportionalAmount = _qp * guestRatio;
-
-    const isCommodity = val.isCommodity === true;
-    const commodityDiscountTypes = ['senior', 'pwd'];
-    const isCommodityDisc = isCommodity && commodityDiscountTypes.includes(discType);
-    const isNaac = discType === 'ntl';
-    const vatablePaxTypes = ['ntl'];
-
-    part.vatType = isCommodityDisc
-      ? defaultVatType
-      : ['diplomat'].includes(discType)
-      ? 'zeroVat'
-      : vatablePaxTypes.includes(discType)
-      ? defaultVatType
-      : discType !== 'regular' || val.zeroVAT
-      ? 'vatExempt'
-      : defaultVatType;
-
-    part.discType = discType;
-    part.discRate = (() => {
-      const maybeRate = parseFloat(discObj.percent as string) / 100;
-      if (!isNaN(maybeRate)) return maybeRate;
-      if (discType === 'regular') return 0;
-      if (isCommodity && commodityDiscountTypes.includes(discType)) {
-        return TransactionItem.defaultOpts.specialDiscountRates['commodity'];
-      }
-      const defaultRate = TransactionItem.defaultOpts.specialDiscountRates[discType];
-      return typeof defaultRate === 'number' ? defaultRate : 0;
-    })();
-    part.guestCount = discObj.guestCount;
-
-    const __willRemoveVat =
-      !isCommodityDisc && !isNaac && !val.zeroVAT && defaultVatType === 'vatable' && discType !== 'regular';
-
-    const baseAmount =
-      defaultVatType === 'vatable'
-        ? TransactionItem.round(proportionalAmount / (1 + vatRate))
-        : proportionalAmount;
-
-    part.vatExemption = __willRemoveVat ? baseAmount * vatRate : 0;
-    part.grossSales = baseAmount;
-
-    const is100Pct =
-      part.discRate >= 1 && (discType === 'regular' || discType === 'ntl') && defaultVatType === 'vatable';
-    const isRegular = discType === 'regular';
-
-    part.discount = is100Pct
-      ? proportionalAmount
-      : isRegular
-      ? proportionalAmount * part.discRate
-      : baseAmount * part.discRate;
-
-    part.netSales = is100Pct
-      ? 0
-      : isRegular
-      ? baseAmount * (1 - part.discRate)
-      : part.grossSales - part.discount;
-
-    part.vat = (() => {
-      if (defaultVatType !== 'vatable') return 0;
-      if (is100Pct) return 0;
-      if (isRegular) return part.netSales * vatRate;
-      if (isNaac) return part.grossSales * vatRate;
-      return 0;
-    })();
-
-    part.service = part.netSales * svcRate;
-    part.total = part.netSales + part.service + part.vat;
-
-    vatExemption += part.vatExemption;
-    discount += part.discount;
-    vat += part.vat;
-    service += part.service;
-    grossSales += part.grossSales;
-    netSales += part.netSales;
-    total += part.total;
-  }
-
-  return { guestCount, values, vatExemption, discount, vat, service, grossSales, netSales, total };
+  return calcPaxDiscount(val, { vatRate, svcRate });
 }
