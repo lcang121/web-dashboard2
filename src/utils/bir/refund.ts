@@ -1,6 +1,6 @@
 import Moment from 'moment-timezone';
 
-import { roundMoney } from './roundMoney';
+import { roundMoney } from './money';
 
 const VAT_RATE = 0.12;
 const SENIOR_RATE = 0.2;

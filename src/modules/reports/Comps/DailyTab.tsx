@@ -30,16 +30,16 @@ import { ref, query, orderByKey, startAt, endAt, get } from "firebase/database";
 import { database } from "../../../config/firebase";
 import { useAuth } from "../../../contexts/AuthContext";
 import Transaction from "../../../models/Transaction";
+import RevenueOverview from "../../../components/charts/RevenueOverview";
+import DailySalesTrend from "../../../components/charts/DailySalesTrend";
+import PaymentMethods from "../../../components/charts/PaymentMethods";
+import SalesBreakdown from "../../../components/charts/SalesBreakdown";
 import {
-  RevenueOverview,
-  DailySalesTrend,
-  PaymentMethods,
-  SalesBreakdown,
   generateRevenueOverview,
   generateDailySalesTrend,
   generatePaymentMethodData,
   generateSalesBreakdownData,
-} from "../../../components/charts";
+} from "../../../utils/chartUtils";
 import Moment from "moment-timezone";
 
 export default function DailyTab() {

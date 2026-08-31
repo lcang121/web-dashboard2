@@ -3,7 +3,7 @@ import Moment from 'moment-timezone';
 
 import { getTransactionSummary } from './transaction';
 import { calcReadingData } from './calcReadingData';
-import { appendTotalsRow } from './totals';
+import { appendTotalsRow } from './format';
 
 const VAT_RATE = 0.12;
 const SENIOR_RATE = 0.2;

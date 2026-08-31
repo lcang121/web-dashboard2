@@ -1,7 +1,6 @@
 // TypeScript port of mobile TransactionItem.js — keep in sync with utakmobileBIR
 
-import { roundMoney } from '../utils/bir/roundMoney';
-import calcPaxDiscount, { PaxDiscountResult, PaxPart } from '../utils/bir/calcPaxDiscount';
+import { roundMoney, calcPaxDiscount, PaxDiscountResult, PaxPart } from '../utils/bir/money';
 
 export const DISCOUNT_TYPES = [
   'regular', 'senior', 'pwd', 'ntlAthlete', 'diplomat', 'soloParent', 'medalOfValor',

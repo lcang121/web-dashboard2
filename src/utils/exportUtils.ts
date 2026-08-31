@@ -4,8 +4,7 @@ import Transaction from '../models/Transaction';
 import Moment from 'moment-timezone';
 import { ref, query, orderByKey, startAt, endAt, get } from 'firebase/database';
 import { database } from '../config/firebase';
-import { appendTotalsRow } from './bir/totals';
-import { formatMoneyColumns } from './bir/receiptFormatters';
+import { appendTotalsRow, formatMoneyColumns } from './bir/format';
 
 export interface ExportOptions {
   filename?: string;

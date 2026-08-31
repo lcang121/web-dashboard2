@@ -10,7 +10,7 @@ import { calcReadingData } from "../../../utils/bir/calcReadingData";
 import { SalesSummary, DetailedSalesReport, SALES_SUMMARY_COLUMNS } from "../../../utils/bir/salesSummary";
 import { renderReading } from "../../../utils/bir/readingReceipt";
 import { aggregateProductMixFromSnapshot } from "../../../utils/bir/productMix";
-import { appendTotalsRow } from "../../../utils/bir/totals";
+import { appendTotalsRow } from "../../../utils/bir/format";
 import { specialDiscounts } from "../../../utils/bir/specialDiscounts";
 
 const MP = Transaction.MONEY_PRECISION;

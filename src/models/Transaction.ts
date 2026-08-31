@@ -1,6 +1,6 @@
 // TypeScript port of mobile Transaction.js — keep in sync with utakmobileBIR
 import TransactionItem, { TransactionItemValue } from './TransactionItem';
-import { roundMoney } from '../utils/bir/roundMoney';
+import { roundMoney } from '../utils/bir/money';
 
 const roundableItemProps = [
   '$amountDue', '__itmTotal',

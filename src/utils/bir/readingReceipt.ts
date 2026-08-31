@@ -1,9 +1,8 @@
 import Moment from 'moment-timezone';
 
 import { calcReadingData } from './calcReadingData';
-import { ACCUMULATED_SALES_RESET_THRESHOLD } from './reading';
-import { alignMiddle, alignRight, fixnum, newline, normalize, bold, pipe } from './receiptFormatters';
-import { getAllTendersFrom } from './tenderCatalog';
+import { ACCUMULATED_SALES_RESET_THRESHOLD, getAllTendersFrom } from './reading';
+import { alignMiddle, alignRight, fixnum, newline, normalize, bold, pipe } from './format';
 
 /**
  * Print a payment row, wrapping a tender name too long for the label column
@@ -49,7 +48,7 @@ export const BUILT_IN_TENDER_ROWS: ReadonlyArray<{ name: string; showAtZero: boo
   { name: 'Gift Card', showAtZero: true },
 ];
 
-/** Matching key for a tender name. Mirrors tenderCatalog's own comparison. */
+/** Matching key for a tender name. Mirrors the tender catalog's own comparison. */
 const canonicalTenderKey = (name: unknown): string =>
   String(name == null ? '' : name).trim().toLowerCase();
 
