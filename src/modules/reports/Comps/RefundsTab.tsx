@@ -211,7 +211,7 @@ export default function RefundsTab() {
           <button
             onClick={handleDownload}
             disabled={!refundsData.value.length || downloadLoading}
-            className="flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-green-600 hover:bg-green-700">
+            className="flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-utak-darkseagreen hover:bg-utak-darkgreen">
             {downloadLoading ? (
               <Loader size={20} className="animate-spin" />
             ) : (
@@ -242,8 +242,8 @@ export default function RefundsTab() {
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Date</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Time</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-orange-700 uppercase">Refunded Amount</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-green-700 uppercase">Original Total</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-utak-orange uppercase">Refunded Amount</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-utak-darkgreen uppercase">Original Total</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase">Refunded Items</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Discount Type</th>
                 </tr>
@@ -259,10 +259,10 @@ export default function RefundsTab() {
                     <td className="px-6 py-4 text-sm text-utak-darkseagreen font-medium">
                       {Moment.unix(Number(refund.key)).format('h:mm a')}
                     </td>
-                    <td className="px-6 py-4 text-sm text-orange-600 font-medium text-right">
+                    <td className="px-6 py-4 text-sm text-utak-orange font-medium text-right">
                       ₱{m.zTotalRefundEffect.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
-                    <td className="px-6 py-4 text-sm text-green-600 font-medium text-right">
+                    <td className="px-6 py-4 text-sm text-utak-darkgreen font-medium text-right">
                       {refund.getFormattedCurrency('$amountDue')}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600 text-right">

@@ -35,8 +35,8 @@ const MetricCard = ({
     <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
       <div className="flex items-center justify-between">
         <div className="flex items-center">
-          <div className="bg-blue-50 p-3 rounded-lg">
-            <Icon className="h-6 w-6 text-blue-600" />
+          <div className="bg-utak-darkseagreen/10 p-3 rounded-lg">
+            <Icon className="h-6 w-6 text-utak-darkseagreen" />
           </div>
           <div className="ml-4">
             <p className="text-sm font-medium text-gray-600">{title}</p>

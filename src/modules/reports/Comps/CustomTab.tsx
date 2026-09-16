@@ -168,9 +168,9 @@ export default function CustomTab() {
     const baseClasses =
       "flex items-center justify-center gap-2 px-4 py-3 rounded font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed";
     const variants = {
-      primary: "bg-orange-500 hover:bg-orange-600",
-      secondary: "bg-pink-500 hover:bg-pink-600",
-      success: "bg-green-600 hover:bg-green-700",
+      primary: "bg-utak-orange hover:bg-utak-pink",
+      secondary: "bg-utak-pink hover:bg-utak-orange",
+      success: "bg-utak-darkseagreen hover:bg-utak-darkgreen",
     };
 
     return (

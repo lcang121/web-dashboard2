@@ -396,9 +396,9 @@ export default function DailyTab() {
     const baseClasses =
       "flex items-center justify-center gap-2 px-4 py-3 rounded font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed";
     const variants = {
-      primary: "bg-orange-500 hover:bg-orange-600",
-      secondary: "bg-pink-500 hover:bg-pink-600",
-      success: "bg-green-600 hover:bg-green-700",
+      primary: "bg-utak-orange hover:bg-utak-pink",
+      secondary: "bg-utak-pink hover:bg-utak-orange",
+      success: "bg-utak-darkseagreen hover:bg-utak-darkgreen",
     };
 
     return (
@@ -456,7 +456,7 @@ export default function DailyTab() {
           </h3>
           <button
             onClick={() => setShowCharts(!showCharts)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-utak-darkseagreen/10 text-utak-darkseagreen rounded-lg hover:bg-utak-darkseagreen/20 transition-colors"
           >
             <BarChart3 size={20} />
             {showCharts ? "Hide Charts" : "Show Charts"}

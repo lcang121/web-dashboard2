@@ -151,7 +151,7 @@ export default function TransactionsTab() {
           <button
             onClick={handleDownload}
             disabled={!txnsData.value.length || downloadLoading}
-            className="flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-green-600 hover:bg-green-700"
+            className="flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-utak-darkseagreen hover:bg-utak-darkgreen"
           >
             {downloadLoading ? (
               <Loader size={20} className="animate-spin" />
@@ -192,7 +192,7 @@ export default function TransactionsTab() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">
                     Time
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-green-700 uppercase">
+                  <th className="px-6 py-3 text-right text-xs font-medium text-utak-darkgreen uppercase">
                     Total
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-utak-text uppercase">
@@ -215,7 +215,7 @@ export default function TransactionsTab() {
                     <td className="px-6 py-4 text-sm text-utak-darkseagreen font-medium">
                       {Moment.unix(Number(txn.key)).format("h:mm a")}
                     </td>
-                    <td className="px-6 py-4 text-sm text-green-600 font-medium text-right">
+                    <td className="px-6 py-4 text-sm text-utak-darkgreen font-medium text-right">
                       {txn.getFormattedCurrency("$amountDue")}
                     </td>
                     <td className="px-6 py-4 text-sm text-utak-darkseagreen font-medium text-right">

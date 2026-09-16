@@ -51,7 +51,7 @@ export default function MonthlyTab() {
     <button
       onClick={onClick}
       disabled={loading}
-      className="flex items-center justify-center gap-2 px-4 py-3 rounded font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-green-600 hover:bg-green-700"
+      className="flex items-center justify-center gap-2 px-4 py-3 rounded font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-utak-darkseagreen hover:bg-utak-darkgreen"
     >
       {loading ? <Loader size={20} className="animate-spin" /> : <Download size={20} />}
       {label}

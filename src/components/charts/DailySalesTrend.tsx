@@ -124,28 +124,28 @@ export default function DailySalesTrend({ data, isLoading = false, height = 400 
           <Line
             type="monotone"
             dataKey="totalSales"
-            stroke="#3b82f6"
+            stroke="#4db6ac"
             strokeWidth={3}
-            dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4 }}
-            activeDot={{ r: 6, fill: '#3b82f6' }}
+            dot={{ fill: '#4db6ac', strokeWidth: 2, r: 4 }}
+            activeDot={{ r: 6, fill: '#4db6ac' }}
             name="Total Sales"
           />
           <Line
             type="monotone"
             dataKey="netSales"
-            stroke="#10b981"
+            stroke="#52ad6c"
             strokeWidth={2}
-            dot={{ fill: '#10b981', strokeWidth: 2, r: 3 }}
-            activeDot={{ r: 5, fill: '#10b981' }}
+            dot={{ fill: '#52ad6c', strokeWidth: 2, r: 3 }}
+            activeDot={{ r: 5, fill: '#52ad6c' }}
             name="Net Sales"
           />
           <Line
             type="monotone"
             dataKey="vatAmount"
-            stroke="#f59e0b"
+            stroke="#efa570"
             strokeWidth={2}
-            dot={{ fill: '#f59e0b', strokeWidth: 2, r: 3 }}
-            activeDot={{ r: 5, fill: '#f59e0b' }}
+            dot={{ fill: '#efa570', strokeWidth: 2, r: 3 }}
+            activeDot={{ r: 5, fill: '#efa570' }}
             name="VAT Amount"
           />
         </LineChart>

@@ -151,28 +151,28 @@ export default function AuditTrailTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-blue-700 uppercase">Audit #</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-blue-700 uppercase">Date</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-green-700 uppercase">Cashier</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-pink-700 uppercase">Activity</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-orange-700 uppercase">Utak Ref</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-orange-700 uppercase">SI #</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-orange-700 uppercase">Txn #</th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-utak-blue uppercase">Audit #</th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-utak-blue uppercase">Date</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-utak-darkgreen uppercase">Cashier</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-utak-pink uppercase">Activity</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-utak-orange uppercase">Utak Ref</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-utak-orange uppercase">SI #</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-utak-orange uppercase">Txn #</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Activity Data</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {paged.map((e) => (
                   <tr key={e.key} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-center text-blue-600 font-medium">{auditNoFor[e.key]}</td>
-                    <td className="px-4 py-3 text-center text-blue-600">
+                    <td className="px-4 py-3 text-center text-utak-blue font-medium">{auditNoFor[e.key]}</td>
+                    <td className="px-4 py-3 text-center text-utak-blue">
                       {Moment.unix(parseInt(e.key, 10)).format('MM/DD/YYYY HH:mm:ss')}
                     </td>
-                    <td className="px-4 py-3 text-green-700">{(e.cashier ?? 'Unknown').toString()}</td>
-                    <td className="px-4 py-3 text-pink-600">{(e.activity ?? '').toString()}</td>
-                    <td className="px-4 py-3 text-orange-600">{extract(e.extraInfo, 'UtakNum')}</td>
-                    <td className="px-4 py-3 text-orange-600">{extract(e.extraInfo, 'SINum')}</td>
-                    <td className="px-4 py-3 text-orange-600">{txnNo(e)}</td>
+                    <td className="px-4 py-3 text-utak-darkgreen">{(e.cashier ?? 'Unknown').toString()}</td>
+                    <td className="px-4 py-3 text-utak-pink">{(e.activity ?? '').toString()}</td>
+                    <td className="px-4 py-3 text-utak-orange">{extract(e.extraInfo, 'UtakNum')}</td>
+                    <td className="px-4 py-3 text-utak-orange">{extract(e.extraInfo, 'SINum')}</td>
+                    <td className="px-4 py-3 text-utak-orange">{txnNo(e)}</td>
                     <td className="px-4 py-3 text-gray-700 font-mono">{removeRefs(e.extraInfo)}</td>
                   </tr>
                 ))}

@@ -132,7 +132,7 @@ export default function ProductMixTab() {
           <button
             onClick={handleDownload}
             disabled={!data.rows.length || downloadLoading}
-            className="flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-green-600 hover:bg-green-700">
+            className="flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-utak-darkseagreen hover:bg-utak-darkgreen">
             {downloadLoading ? <Loader size={20} className="animate-spin" /> : <Download size={20} />}
             {downloadLoading ? 'Saving...' : 'Save XLSX'}
           </button>
@@ -147,11 +147,11 @@ export default function ProductMixTab() {
             <p className="text-xs text-gray-500 uppercase">Products</p>
           </div>
           <div className="bg-white rounded-lg shadow-sm p-4 text-center">
-            <p className="text-2xl font-bold text-blue-700">{totalQty.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-utak-blue">{totalQty.toLocaleString()}</p>
             <p className="text-xs text-gray-500 uppercase">Units Sold</p>
           </div>
           <div className="bg-white rounded-lg shadow-sm p-4 text-center">
-            <p className="text-2xl font-bold text-green-700">{peso(totalSales)}</p>
+            <p className="text-2xl font-bold text-utak-darkgreen">{peso(totalSales)}</p>
             <p className="text-xs text-gray-500 uppercase">Gross Sales</p>
           </div>
         </div>
@@ -178,8 +178,8 @@ export default function ProductMixTab() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Item</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Option</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Category</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-blue-700 uppercase">Qty Sold</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-green-700 uppercase">Gross Sales</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-utak-blue uppercase">Qty Sold</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-utak-darkgreen uppercase">Gross Sales</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase">% of Sales</th>
                 </tr>
               </thead>
@@ -190,8 +190,8 @@ export default function ProductMixTab() {
                     <td className="px-6 py-4 text-sm text-gray-900 font-medium">{r.item}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">{r.option || '—'}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">{r.category || '—'}</td>
-                    <td className="px-6 py-4 text-sm text-blue-600 font-medium text-right">{r.quantity.toLocaleString()}</td>
-                    <td className="px-6 py-4 text-sm text-green-600 font-medium text-right">{peso(r.sales)}</td>
+                    <td className="px-6 py-4 text-sm text-utak-blue font-medium text-right">{r.quantity.toLocaleString()}</td>
+                    <td className="px-6 py-4 text-sm text-utak-darkgreen font-medium text-right">{peso(r.sales)}</td>
                     <td className="px-6 py-4 text-sm text-gray-500 text-right">
                       {totalSales > 0 ? ((r.sales / totalSales) * 100).toFixed(1) : '0.0'}%
                     </td>

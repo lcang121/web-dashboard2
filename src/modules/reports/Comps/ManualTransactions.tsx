@@ -139,7 +139,7 @@ export default function ManualTransactions() {
           <button
             onClick={handleDownload}
             disabled={!manualTxnsData.value.length || downloadLoading}
-            className="flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-green-600 hover:bg-green-700">
+            className="flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-semibold text-white transition-opacity disabled:opacity-50 disabled:cursor-not-allowed bg-utak-darkseagreen hover:bg-utak-darkgreen">
             {downloadLoading ? (
               <Loader size={20} className="animate-spin" />
             ) : (
@@ -171,8 +171,8 @@ export default function ManualTransactions() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Date</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Time</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-utak-text uppercase">Manual Reference</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-purple-700 uppercase">Receipt No</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-green-700 uppercase">Total</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-utak-purple uppercase">Receipt No</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-utak-darkgreen uppercase">Total</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-utak-text uppercase">Service</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase">Items</th>
                 </tr>
@@ -189,10 +189,10 @@ export default function ManualTransactions() {
                     <td className="px-6 py-4 text-sm text-utak-darkseagreen">
                       {txn.original.manualReference || '—'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-purple-600">
+                    <td className="px-6 py-4 text-sm text-utak-purple">
                       {txn.original.receiptNo || '—'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-green-600 font-medium text-right">
+                    <td className="px-6 py-4 text-sm text-utak-darkgreen font-medium text-right">
                       {txn.getFormattedCurrency('$amountDue')}
                     </td>
                     <td className="px-6 py-4 text-sm text-utak-darkseagreen font-medium text-right">
