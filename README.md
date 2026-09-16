@@ -62,6 +62,8 @@ A modern React-based dashboard application for managing transactions, reports, a
    VITE_FIREBASE_APP_ID=your_firebase_app_id
    ```
 
+  For Vercel, add these same `VITE_FIREBASE_*` variables under Project Settings > Environment Variables for each environment, then redeploy.
+
 ## Available Scripts
 
 - **Development**: Start the development server
