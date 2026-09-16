@@ -148,19 +148,19 @@ export default function SalesBreakdown({
           {/* Main sales categories */}
           <Bar
             dataKey="vatableSales"
-            fill="#3b82f6"
+            fill="#8fccc9"
             name="VATable Sales"
             radius={[0, 0, 0, 0]}
           />
           <Bar
             dataKey="vatExemptSales"
-            fill="#10b981"
+            fill="#52ad6c"
             name="VAT-Exempt Sales"
             radius={[0, 0, 0, 0]}
           />
           <Bar
             dataKey="zeroRatedSales"
-            fill="#f59e0b"
+            fill="#efa570"
             name="Zero-Rated Sales"
             radius={[0, 0, 0, 0]}
           />
@@ -169,7 +169,7 @@ export default function SalesBreakdown({
           {showDiscounts && (
             <Bar
               dataKey="discounts"
-              fill="#ef4444"
+              fill="#efa28c"
               name="Discounts"
               radius={[0, 0, 0, 0]}
             />
@@ -177,7 +177,7 @@ export default function SalesBreakdown({
           {showServiceCharges && (
             <Bar
               dataKey="serviceCharges"
-              fill="#8b5cf6"
+              fill="#4db6ac"
               name="Service Charges"
               radius={[0, 0, 0, 0]}
             />
@@ -187,42 +187,42 @@ export default function SalesBreakdown({
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mt-6 pt-4 border-t border-gray-100">
-        <div className="text-center p-3 bg-blue-50 rounded-lg">
-          <p className="text-lg font-bold text-blue-700">
+        <div className="text-center p-3 bg-utak-blue/10 rounded-lg">
+          <p className="text-lg font-bold text-utak-blue">
             ₱{totals.vatableSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
-          <p className="text-xs text-blue-600">VATable Sales</p>
+          <p className="text-xs text-utak-blue">VATable Sales</p>
           <p className="text-xs text-gray-500">
             {totalSales > 0 ? ((totals.vatableSales / totalSales) * 100).toFixed(1) : 0}%
           </p>
         </div>
 
-        <div className="text-center p-3 bg-green-50 rounded-lg">
-          <p className="text-lg font-bold text-green-700">
+        <div className="text-center p-3 bg-utak-darkgreen/10 rounded-lg">
+          <p className="text-lg font-bold text-utak-darkgreen">
             ₱{totals.vatExemptSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
-          <p className="text-xs text-green-600">VAT-Exempt</p>
+          <p className="text-xs text-utak-darkgreen">VAT-Exempt</p>
           <p className="text-xs text-gray-500">
             {totalSales > 0 ? ((totals.vatExemptSales / totalSales) * 100).toFixed(1) : 0}%
           </p>
         </div>
 
-        <div className="text-center p-3 bg-yellow-50 rounded-lg">
-          <p className="text-lg font-bold text-yellow-700">
+        <div className="text-center p-3 bg-utak-orange/10 rounded-lg">
+          <p className="text-lg font-bold text-utak-orange">
             ₱{totals.zeroRatedSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
-          <p className="text-xs text-yellow-600">Zero-Rated</p>
+          <p className="text-xs text-utak-orange">Zero-Rated</p>
           <p className="text-xs text-gray-500">
             {totalSales > 0 ? ((totals.zeroRatedSales / totalSales) * 100).toFixed(1) : 0}%
           </p>
         </div>
 
         {showDiscounts && (
-          <div className="text-center p-3 bg-red-50 rounded-lg">
-            <p className="text-lg font-bold text-red-700">
+          <div className="text-center p-3 bg-utak-pink/10 rounded-lg">
+            <p className="text-lg font-bold text-utak-pink">
               ₱{totals.discounts.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
-            <p className="text-xs text-red-600">Discounts</p>
+            <p className="text-xs text-utak-pink">Discounts</p>
             <p className="text-xs text-gray-500">
               {totalSales > 0 ? ((totals.discounts / totalSales) * 100).toFixed(1) : 0}%
             </p>
@@ -230,11 +230,11 @@ export default function SalesBreakdown({
         )}
 
         {showServiceCharges && (
-          <div className="text-center p-3 bg-purple-50 rounded-lg">
-            <p className="text-lg font-bold text-purple-700">
+          <div className="text-center p-3 bg-utak-darkseagreen/10 rounded-lg">
+            <p className="text-lg font-bold text-utak-darkseagreen">
               ₱{totals.serviceCharges.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
-            <p className="text-xs text-purple-600">Service</p>
+            <p className="text-xs text-utak-darkseagreen">Service</p>
             <p className="text-xs text-gray-500">
               {totalSales > 0 ? ((totals.serviceCharges / totalSales) * 100).toFixed(1) : 0}%
             </p>
