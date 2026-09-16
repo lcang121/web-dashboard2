@@ -36,22 +36,26 @@ A modern React-based dashboard application for managing transactions, reports, a
 ## Installation
 
 1. Clone the repository:
+
    ```bash
    git clone <repository-url>
    cd web-dashboard
    ```
 
 2. Install dependencies:
+
    ```bash
    npm install
    ```
 
 3. Set up environment variables:
+
    ```bash
    cp .env.example .env.local
    ```
 
    Edit `.env.local` and add your Firebase configuration:
+
    ```env
    VITE_FIREBASE_API_KEY=your_firebase_api_key
    VITE_FIREBASE_AUTH_DOMAIN=your_firebase_auth_domain
@@ -62,21 +66,24 @@ A modern React-based dashboard application for managing transactions, reports, a
    VITE_FIREBASE_APP_ID=your_firebase_app_id
    ```
 
-  For Vercel, add these same `VITE_FIREBASE_*` variables under Project Settings > Environment Variables for each environment, then redeploy.
+For Vercel, add these same `VITE_FIREBASE_*` variables under Project Settings > Environment Variables for each environment, then redeploy.
 
 ## Available Scripts
 
 - **Development**: Start the development server
+
   ```bash
   npm run dev
   ```
 
 - **Build**: Create production build
+
   ```bash
   npm run build
   ```
 
 - **Preview**: Preview production build locally
+
   ```bash
   npm run preview
   ```
@@ -124,6 +131,7 @@ src/
 ## Development
 
 The application uses:
+
 - **Hot Module Replacement** for fast development
 - **TypeScript** for type safety
 - **ESLint** and **Prettier** for code quality (configure as needed)

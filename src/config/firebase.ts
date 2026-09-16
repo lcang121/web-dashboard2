@@ -2,11 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
 import { getDatabase, Database } from 'firebase/database';
 
-const getRequiredEnv = (name: string): string => {
-  const env = (import.meta as ImportMeta & {
-    env: Record<string, string | undefined>;
-  }).env;
-  const value = env[name];
+const getRequiredEnv = (name: string, value: string | undefined): string => {
 
   if (!value) {
     throw new Error(`Missing required Firebase environment variable: ${name}`);
@@ -17,13 +13,16 @@ const getRequiredEnv = (name: string): string => {
 
 // Firebase configuration is supplied through Vercel or a local .env file.
 const firebaseConfig = {
-  apiKey: getRequiredEnv('VITE_FIREBASE_API_KEY'),
-  authDomain: getRequiredEnv('VITE_FIREBASE_AUTH_DOMAIN'),
-  databaseURL: getRequiredEnv('VITE_FIREBASE_DATABASE_URL'),
-  projectId: getRequiredEnv('VITE_FIREBASE_PROJECT_ID'),
-  storageBucket: getRequiredEnv('VITE_FIREBASE_STORAGE_BUCKET'),
-  messagingSenderId: getRequiredEnv('VITE_FIREBASE_MESSAGING_SENDER_ID'),
-  appId: getRequiredEnv('VITE_FIREBASE_APP_ID'),
+  apiKey: getRequiredEnv('VITE_FIREBASE_API_KEY', import.meta.env.VITE_FIREBASE_API_KEY),
+  authDomain: getRequiredEnv('VITE_FIREBASE_AUTH_DOMAIN', import.meta.env.VITE_FIREBASE_AUTH_DOMAIN),
+  databaseURL: getRequiredEnv('VITE_FIREBASE_DATABASE_URL', import.meta.env.VITE_FIREBASE_DATABASE_URL),
+  projectId: getRequiredEnv('VITE_FIREBASE_PROJECT_ID', import.meta.env.VITE_FIREBASE_PROJECT_ID),
+  storageBucket: getRequiredEnv('VITE_FIREBASE_STORAGE_BUCKET', import.meta.env.VITE_FIREBASE_STORAGE_BUCKET),
+  messagingSenderId: getRequiredEnv(
+    'VITE_FIREBASE_MESSAGING_SENDER_ID',
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  ),
+  appId: getRequiredEnv('VITE_FIREBASE_APP_ID', import.meta.env.VITE_FIREBASE_APP_ID),
 };
 
 // Initialize Firebase
